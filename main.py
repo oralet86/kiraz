@@ -2,17 +2,25 @@ from ultralytics import YOLO
 import cv2
 import math
 from pathlib import Path
+import logging
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 # start webcam
+logging.info("Starting Webcam")
 cap = cv2.VideoCapture(0)
 cap.set(3, 1920)
 cap.set(4, 1080)
 
 # model
-model_path = Path("models") / "yolo11x.pt"
+logging.info("Starting model")
+model_path = Path("models") / "yolo11l.pt"
 model = YOLO(model_path)
 
 # object classes
+logging.info("Class names")
 classNames = [
     "person",
     "bicycle",
@@ -96,10 +104,10 @@ classNames = [
     "toothbrush",
 ]
 
-
+logging.info("Entering loop")
 while True:
     success, img = cap.read()
-    results = model.predict(img, stream=True, device="cuda")
+    results = model(img, stream=True, device="cuda")
 
     # coordinates
     for r in results:
