@@ -1,3 +1,12 @@
+# Misc
+.env
+data
+data_split
+data_resized
+data_resized_split
+models
+results
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
