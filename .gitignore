@@ -1,6 +1,6 @@
 # Misc
 .env
-data
+datasets
 data_split
 data_resized
 data_resized_split

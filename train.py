@@ -32,7 +32,7 @@ MODEL_NAME = args.model
 
 RESULTS_DIR = Path("results")
 
-DATASET_DIR = Path("data_split")
+DATASET_DIR = Path("datasets/data_combined")
 DATA_YAML = DATASET_DIR / "data.yaml"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
