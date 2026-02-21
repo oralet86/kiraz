@@ -6,6 +6,7 @@ data_resized
 data_resized_split
 models
 results
+*.pt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

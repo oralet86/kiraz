@@ -3,7 +3,7 @@ import cv2
 
 INPUT_DIR = Path("data_split") / "train"
 OUTPUT_DIR = Path("data_resized_split") / "train"
-BUFFER_RATIO = 0.15
+BUFFER_RATIO = 0.20
 
 IMG_DIR = INPUT_DIR / "images"
 LBL_DIR = INPUT_DIR / "labels"

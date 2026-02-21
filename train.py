@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from ultralytics import YOLO
 from pathlib import Path
 import logging
@@ -8,25 +9,39 @@ from typing import Any, Dict
 import torch
 import numpy as np
 
-LOG = True
+parser = argparse.ArgumentParser(
+    description="Train a YOLOv11 model on the ArUco dataset"
+)
+parser.add_argument(
+    "--log",
+    action="store_true",
+    default=True,
+    help="Enable logging",
+)
+parser.add_argument(
+    "--model", type=str, default="yolo11s.pt", help="Base model to start training from"
+)
+parser.add_argument(
+    "--batch", type=int, default=16, help="Batch size for training (default: 16)"
+)
+
+args = parser.parse_args()
+
+LOG = args.log
+MODEL_NAME = args.model
 
 RESULTS_DIR = Path("results")
-MODELS_DIR = Path("models")
 
-DATASET_DIR = Path("data_resized_split")
+DATASET_DIR = Path("data_split")
 DATA_YAML = DATASET_DIR / "data.yaml"
 
-BASE_MODEL_PATH = Path("models") / "yolo11s.pt"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-EPOCHS = 200
-PATIENCE = 20
-IMGSZ = 768
-BATCH = -1
+EPOCHS = 100
+PATIENCE = 15
+IMGSZ = 640
+BATCH = args.batch
 
 # Torch CUDA settings
-torch.backends.cudnn.benchmark = False
-torch.backends.cudnn.deterministic = False
 torch.backends.cuda.matmul.fp32_precision = "tf32"
 torch.backends.cudnn.conv.fp32_precision = "tf32"  # type: ignore
 
@@ -173,8 +188,8 @@ def train_model(ts: str) -> Path:
     ensure_dataset_layout(DATASET_DIR)
     ensure_data_yaml(DATASET_DIR, DATA_YAML)
 
-    logging.info("Loading base model: %s", BASE_MODEL_PATH)
-    model = YOLO(BASE_MODEL_PATH)
+    logging.info("Loading base model: %s", MODEL_NAME)
+    model = YOLO(MODEL_NAME)
 
     if torch.cuda.is_available():
         device_name = torch.cuda.get_device_name(0)
@@ -203,15 +218,24 @@ def train_model(ts: str) -> Path:
         lr0=4e-4,
         lrf=0.01,
         optimizer="AdamW",
-        mosaic=0.5,
-        scale=0.5,
-        translate=0.5,
-        hsv_h=0.015,
-        hsv_s=0.4,
-        hsv_v=0.25,
+        close_mosaic=10,
+        hsv_h=0.02,
+        hsv_s=0.6,
+        hsv_v=0.35,
+        degrees=2.0,
+        translate=0.1,
+        scale=0.7,
+        shear=0.03,
+        perspective=0.0003,
+        flipud=0.0,
         fliplr=0.5,
-        perspective=5e-4,
-        mixup=0.1,
+        mosaic=1.0,
+        mixup=0.15,
+        copy_paste=0.4,
+        box=15.0,
+        iou=0.5,
+        cls=1.5,
+        dfl=2.0,
     )
 
     if results is None:
