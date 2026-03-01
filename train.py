@@ -2,18 +2,30 @@ from __future__ import annotations
 
 import argparse
 from ultralytics import YOLO
+from ultralytics.utils.metrics import box_iou
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 import torch
 import time
 import numpy as np
+import random
+import os
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 from hyperparams import get_hyperparams, HPO_DATABASE
 from log import logger, add_log_file
-from paths import RESULTS_DIR, DATASET_CLS_DIR, DATASET_COMBINED_DIR, DATA_YAML, RESULTS_CSV, MODELS_DIR
+from paths import (
+    RESULTS_DIR,
+    DATASET_CLS_DIR,
+    DATASET_COMBINED_DIR,
+    DATA_YAML,
+    RESULTS_CSV,
+    MODELS_DIR,
+)
 
-parser = argparse.ArgumentParser(description="Train a YOLO model (classification or detection)")
+parser = argparse.ArgumentParser(
+    description="Train a YOLO model (classification or detection)"
+)
 parser.add_argument(
     "--mode",
     type=str,
@@ -21,13 +33,17 @@ parser.add_argument(
     required=True,
     help="Training mode: 'cls' for classification, 'detect' for object detection",
 )
-parser.add_argument(
-    "--model", type=str, help="Base model to start training from"
-)
+parser.add_argument("--model", type=str, help="Base model to start training from")
 parser.add_argument(
     "--hpo",
     action="store_true",
     help="Use HPO-optimized hyperparameters for supported models",
+)
+parser.add_argument(
+    "--seed",
+    type=int,
+    default=42,
+    help="Random seed for reproducible training (default: 42)",
 )
 
 args = parser.parse_args()
@@ -55,6 +71,31 @@ def setup_logging(log_file: Path) -> None:
     logger.info(f"Training log file: {log_file}")
 
 
+def set_seed(seed: int) -> None:
+    """Set random seeds for all libraries to ensure reproducible results."""
+    logger.info(f"Setting random seed to {seed} for reproducible training")
+
+    # Python random seed
+    random.seed(seed)
+
+    # NumPy seed
+    np.random.seed(seed)
+
+    # PyTorch seeds
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # Ensure deterministic behavior (may impact performance)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    # Set environment variable for additional libraries
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
+    logger.info("Random seeds set for reproducible training")
+
+
 def ensure_dataset_layout(dataset_dir: Path, mode: str) -> None:
     """Validate dataset structure based on mode."""
     if mode == "cls":
@@ -64,7 +105,9 @@ def ensure_dataset_layout(dataset_dir: Path, mode: str) -> None:
             dataset_dir / "val",
             dataset_dir / "test",
         ]
-        missing_msg = "Classification dataset structure is missing required split folders"
+        missing_msg = (
+            "Classification dataset structure is missing required split folders"
+        )
     else:  # detect
         # Detection uses images/labels structure
         required = [
@@ -131,24 +174,6 @@ def _extract_metrics(results_obj: Any, mode: str) -> Dict[str, Any]:
                     if len(v) > 0:
                         metrics[f"box_{k}"] = float(np.mean(v))
                         metrics[f"box_{k}_per_class"] = [float(x) for x in v]
-            
-            # Add IoU metrics if available
-            # IoU threshold is typically 0.5 for mAP50 calculation
-            # Some YOLO versions provide direct IoU metrics
-            iou_metrics = []
-            
-            # Check for IoU-related attributes
-            for iou_attr in ['iou', 'iou_t', 'mean_iou']:
-                if hasattr(box, iou_attr):
-                    v = getattr(box, iou_attr)
-                    if v is not None:
-                        if isinstance(v, (int, float, np.generic)):
-                            metrics[f"box_{iou_attr}"] = float(v)
-                            iou_metrics.append(iou_attr)
-                        elif isinstance(v, (np.ndarray, list, tuple)) and len(v) > 0:
-                            metrics[f"box_{iou_attr}"] = float(np.mean(v))
-                            metrics[f"box_{iou_attr}_per_class"] = [float(x) for x in v]
-                            iou_metrics.append(iou_attr)
 
         rd = getattr(results_obj, "results_dict", None)
         if isinstance(rd, dict):
@@ -157,16 +182,6 @@ def _extract_metrics(results_obj: Any, mode: str) -> Dict[str, Any]:
                     metrics[k] = float(v)
                 elif isinstance(v, (np.ndarray, list, tuple)) and len(v) > 0:
                     metrics[k] = float(np.mean(v))
-            
-            # Also check for IoU metrics in results_dict
-            iou_dict_keys = [k for k in rd.keys() if 'iou' in k.lower()]
-            for key in iou_dict_keys:
-                v = rd[key]
-                if isinstance(v, (int, float, np.generic)):
-                    metrics[key] = float(v)
-                elif isinstance(v, (np.ndarray, list, tuple)) and len(v) > 0:
-                    metrics[key] = float(np.mean(v))
-                    metrics[f"{key}_per_class"] = [float(x) for x in v]
 
     # Speed metrics are common to both modes
     speed = getattr(results_obj, "speed", None)
@@ -202,11 +217,6 @@ def log_metrics(metrics: Dict[str, Any], mode: str, prefix: str = "Metrics") -> 
             "box_map",
             "box_map50",
             "box_map75",
-            "box_iou",
-            "box_mean_iou",
-            "box_iou_t",
-            "box_iou_50",
-            "box_iou_75",
             "box_f1",
             "box_mp",
             "box_mr",
@@ -234,9 +244,74 @@ def log_metrics(metrics: Dict[str, Any], mode: str, prefix: str = "Metrics") -> 
             logger.info("  %-24s %s", key + ":", val)
 
 
+def calculate_mean_iou_detect(
+    model: YOLO, dataset_dir: Path, split: str
+) -> Dict[str, float]:
+    """Calculate mean IoU for detection by matching predictions to ground truth using box_iou."""
+    img_dir = dataset_dir / split / "images"
+    lbl_dir = dataset_dir / split / "labels"
+
+    if not img_dir.exists():
+        return {}
+
+    iou_values: List[float] = []
+
+    for img_path in img_dir.glob("*"):
+        if img_path.suffix.lower() not in [".jpg", ".jpeg", ".png", ".bmp"]:
+            continue
+
+        lbl_path = lbl_dir / f"{img_path.stem}.txt"
+        if not lbl_path.exists():
+            continue
+
+        try:
+            results = model(str(img_path), verbose=False)
+            preds = results[0].boxes
+            if preds is None or len(preds) == 0:
+                continue
+
+            pred_xyxy = preds.xyxy  # (N, 4) tensor
+
+            # Load ground truth in YOLO format and convert to xyxy
+            img = results[0].orig_img
+            h, w = img.shape[:2]
+            gt_boxes: List[List[float]] = []
+            with open(lbl_path, "r") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) < 5:
+                        continue
+                    _, cx, cy, bw, bh = map(float, parts[:5])
+                    x1 = (cx - bw / 2) * w
+                    y1 = (cy - bh / 2) * h
+                    x2 = (cx + bw / 2) * w
+                    y2 = (cy + bh / 2) * h
+                    gt_boxes.append([x1, y1, x2, y2])
+
+            if not gt_boxes:
+                continue
+
+            gt_xyxy = torch.tensor(
+                gt_boxes, dtype=torch.float32, device=pred_xyxy.device
+            )
+
+            # box_iou returns (N_pred, N_gt) matrix; take max IoU per GT box
+            iou_matrix = box_iou(pred_xyxy, gt_xyxy)  # (N_pred, N_gt)
+            matched_iou = iou_matrix.max(dim=0).values  # best pred IoU per GT
+            iou_values.extend(matched_iou.cpu().tolist())
+
+        except Exception as e:
+            logger.warning("IoU calculation failed for %s: %s", img_path.name, e)
+
+    if not iou_values:
+        return {}
+
+    return {"mean_iou": float(np.mean(iou_values))}
 
 
-def calculate_additional_metrics_cls(model: YOLO, val_files: List[str], dataset_dir: Path) -> Dict[str, float]:
+def calculate_additional_metrics_cls(
+    model: YOLO, val_files: List[str], dataset_dir: Path
+) -> Dict[str, float]:
     """Calculate precision, recall, F1, and ROC-AUC for classification."""
     try:
         # Get predictions for validation files
@@ -259,14 +334,16 @@ def calculate_additional_metrics_cls(model: YOLO, val_files: List[str], dataset_
             results = model(file_path)
             pred_class = results[0].probs.top1
             y_pred.append(pred_class)
-            
+
             # Get probability scores for ROC-AUC (probability of positive class)
             # For binary classification, we'll use the probability of class 1
             probs = results[0].probs.data
             if len(probs) == 2:  # Binary classification
                 y_scores.append(float(probs[1]))  # Probability of class 1
             else:
-                y_scores.append(float(probs[pred_class]))  # Fallback to predicted class prob
+                y_scores.append(
+                    float(probs[pred_class])
+                )  # Fallback to predicted class prob
 
         # Calculate metrics
         precision, recall, f1, _ = precision_recall_fscore_support(
@@ -299,7 +376,7 @@ def log_results_to_file(
 
     # Unified header for both modes; primary metric column named generically
     if not results_file.exists():
-        header = "model_name,mode,train_primary,train_prec,train_recall,train_f1,val_primary,val_prec,val_recall,val_f1,test_primary,test_prec,test_recall,test_f1,train_time,inference_time,timestamp\n"
+        header = "model_name,mode,seed,train_primary,train_prec,train_recall,train_f1,val_primary,val_prec,val_recall,val_f1,test_primary,test_prec,test_recall,test_f1,train_time,inference_time,timestamp\n"
         try:
             with open(results_file, "w", encoding="utf-8") as f:
                 f.write(header)
@@ -326,7 +403,7 @@ def log_results_to_file(
     test_recall = metrics.get("test_recall", 0.0)
     test_f1 = metrics.get("test_f1", 0.0)
 
-    line = f'"{model_name}",{mode},{train_primary:.6f},{train_prec:.6f},{train_recall:.6f},{train_f1:.6f},{val_primary:.6f},{val_prec:.6f},{val_recall:.6f},{val_f1:.6f},{test_primary:.6f},{test_prec:.6f},{test_recall:.6f},{test_f1:.6f},{train_time:.2f},{inference_time:.2f},"{timestamp}"\n'
+    line = f'"{model_name}",{mode},{args.seed},{train_primary:.6f},{train_prec:.6f},{train_recall:.6f},{train_f1:.6f},{val_primary:.6f},{val_prec:.6f},{val_recall:.6f},{val_f1:.6f},{test_primary:.6f},{test_prec:.6f},{test_recall:.6f},{test_f1:.6f},{train_time:.2f},{inference_time:.2f},"{timestamp}"\n'
 
     try:
         with open(results_file, "a", encoding="utf-8") as f:
@@ -340,10 +417,10 @@ def train_model(ts: str, mode: str) -> Tuple[Path, Dict[str, Any], float]:
     # Use appropriate dataset based on mode
     dataset_dir = DATASET_CLS_DIR if mode == "cls" else DATASET_COMBINED_DIR
     data_yaml = DATA_YAML if mode == "detect" else None
-    
+
     logger.info("Validating dataset layout under %s", dataset_dir)
     ensure_dataset_layout(dataset_dir, mode)
-    
+
     if mode == "detect":
         ensure_data_yaml(dataset_dir, data_yaml)
 
@@ -366,7 +443,7 @@ def train_model(ts: str, mode: str) -> Tuple[Path, Dict[str, Any], float]:
 
     # Get hyperparameters based on flag
     hyperparams = get_hyperparams(MODEL_NAME, hpo=args.hpo)
-    
+
     # Determine parameter type for logging
     model_name_lower = MODEL_NAME.lower()
     if args.hpo and model_name_lower in HPO_DATABASE:
@@ -380,7 +457,7 @@ def train_model(ts: str, mode: str) -> Tuple[Path, Dict[str, Any], float]:
 
     # Training data parameter differs by mode
     train_data = str(dataset_dir.resolve()) if mode == "cls" else str(data_yaml)
-    
+
     try:
         results = model.train(
             data=train_data,
@@ -390,6 +467,7 @@ def train_model(ts: str, mode: str) -> Tuple[Path, Dict[str, Any], float]:
             name=f"{ts}-train",
             save=True,
             exist_ok=True,
+            seed=args.seed,
             **hyperparams,
         )
     except Exception as e:
@@ -462,7 +540,9 @@ def evaluate_on_splits(best_weights: Path, ts: str, mode: str) -> Dict[str, Any]
                         if img_file.suffix.lower() in [".jpg", ".jpeg", ".png", ".bmp"]:
                             split_files.append(str(img_file))
 
-            additional_metrics = calculate_additional_metrics_cls(model, split_files, dataset_dir)
+            additional_metrics = calculate_additional_metrics_cls(
+                model, split_files, dataset_dir
+            )
             for key, value in additional_metrics.items():
                 all_metrics[f"{split}_{key}"] = value
         else:  # detect
@@ -473,6 +553,10 @@ def evaluate_on_splits(best_weights: Path, ts: str, mode: str) -> Dict[str, Any]
             all_metrics[f"{split}_precision"] = prec
             all_metrics[f"{split}_recall"] = rec
             all_metrics[f"{split}_f1"] = f1
+
+            iou_metrics = calculate_mean_iou_detect(model, dataset_dir, split)
+            for key, value in iou_metrics.items():
+                all_metrics[f"{split}_{key}"] = value
 
     # Log all metrics
     log_metrics(all_metrics, mode)
@@ -486,7 +570,15 @@ def main() -> None:
     log_file = RESULTS_DIR / f"{ts}-run.log"
     setup_logging(log_file)
 
-    logger.info("Starting %s training with model: %s", args.mode, MODEL_NAME)
+    # Set random seed for reproducible training
+    set_seed(args.seed)
+
+    logger.info(
+        "Starting %s training with model: %s (seed: %d)",
+        args.mode,
+        MODEL_NAME,
+        args.seed,
+    )
 
     # Train model
     best_weights, train_metrics, train_time = train_model(ts, args.mode)
