@@ -42,14 +42,6 @@ else:  # detect
         raise ValueError("--model is required for detection mode")
     MODEL_NAME = args.model
 
-# Construct full model path from MODELS_DIR
-MODEL_PATH = MODELS_DIR / MODEL_NAME
-if not MODEL_PATH.exists():
-    logger.info(f"Model not found in {MODELS_DIR}, will download: {MODEL_NAME}")
-    MODEL_PATH = MODEL_NAME  # Let YOLO handle download
-else:
-    logger.info(f"Using model from: {MODEL_PATH}")
-
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Torch CUDA settings
@@ -354,6 +346,14 @@ def train_model(ts: str, mode: str) -> Tuple[Path, Dict[str, Any], float]:
     
     if mode == "detect":
         ensure_data_yaml(dataset_dir, data_yaml)
+
+    # Construct full model path from MODELS_DIR
+    MODEL_PATH = MODELS_DIR / MODEL_NAME
+    if not MODEL_PATH.exists():
+        logger.info(f"Model not found in {MODELS_DIR}, will download: {MODEL_NAME}")
+        MODEL_PATH = MODEL_NAME  # Let YOLO handle download
+    else:
+        logger.info(f"Using model from: {MODEL_PATH}")
 
     logger.info("Loading base model: %s", MODEL_PATH)
     model = YOLO(str(MODEL_PATH), task="classify" if mode == "cls" else "detect")
