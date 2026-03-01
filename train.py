@@ -11,7 +11,7 @@ import numpy as np
 from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 from hyperparams import get_hyperparams, HPO_DATABASE
 from log import logger, add_log_file
-from paths import RESULTS_DIR, DATASET_CLS_DIR, DATASET_COMBINED_DIR, DATA_YAML, RESULTS_CSV
+from paths import RESULTS_DIR, DATASET_CLS_DIR, DATASET_COMBINED_DIR, DATA_YAML, RESULTS_CSV, MODELS_DIR
 
 parser = argparse.ArgumentParser(description="Train a YOLO model (classification or detection)")
 parser.add_argument(
@@ -41,6 +41,14 @@ else:  # detect
     if not args.model:
         raise ValueError("--model is required for detection mode")
     MODEL_NAME = args.model
+
+# Construct full model path from MODELS_DIR
+MODEL_PATH = MODELS_DIR / MODEL_NAME
+if not MODEL_PATH.exists():
+    logger.info(f"Model not found in {MODELS_DIR}, will download: {MODEL_NAME}")
+    MODEL_PATH = MODEL_NAME  # Let YOLO handle download
+else:
+    logger.info(f"Using model from: {MODEL_PATH}")
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -347,8 +355,8 @@ def train_model(ts: str, mode: str) -> Tuple[Path, Dict[str, Any], float]:
     if mode == "detect":
         ensure_data_yaml(dataset_dir, data_yaml)
 
-    logger.info("Loading base model: %s", MODEL_NAME)
-    model = YOLO(MODEL_NAME, task="classify" if mode == "cls" else "detect")
+    logger.info("Loading base model: %s", MODEL_PATH)
+    model = YOLO(str(MODEL_PATH), task="classify" if mode == "cls" else "detect")
 
     if torch.cuda.is_available():
         device_name = torch.cuda.get_device_name(0)
