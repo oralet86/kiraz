@@ -25,7 +25,12 @@ import random
 import os
 from collections import Counter, defaultdict
 from typing import List, Dict, Tuple, Optional
-from paths import DATASET_SPLIT_DIR, DATASET_COMBINED_DIR, DATASET_CLIPPED_SPLIT_DIR, DATASET_CLS_ALT_DIR
+from paths import (
+    DATASET_SPLIT_DIR,
+    DATASET_COMBINED_DIR,
+    DATASET_CLIPPED_SPLIT_DIR,
+    DATASET_CLS_ALT_DIR,
+)
 
 # GLOBAL CONFIGURATION
 
@@ -233,10 +238,10 @@ def analyze_dataset_resolution(
 def load_class_names(dataset_path: Path) -> Optional[List[str]]:
     """
     Load class names from YOLO data.yaml file.
-    
+
     Args:
         dataset_path: Root directory containing data.yaml
-    
+
     Returns:
         List of class names or None if file not found
     """
@@ -256,17 +261,17 @@ def load_class_names(dataset_path: Path) -> Optional[List[str]]:
                 return [data["names"][k] for k in sorted(data["names"].keys())]
     except Exception as e:
         logger.error(f"Error reading {yaml_path}: {e}")
-    
+
     return None
 
 
 def read_label_counts(label_path: Path) -> Counter:
     """
     Count objects per class in a YOLO label file.
-    
+
     Args:
         label_path: Path to YOLO label file
-    
+
     Returns:
         Counter with class_id -> count mapping
     """
@@ -282,17 +287,17 @@ def read_label_counts(label_path: Path) -> Counter:
                     counts[int(parts[0])] += 1
     except Exception as e:
         logger.error(f"Error reading {label_path}: {e}")
-    
+
     return counts
 
 
 def get_image_files(images_dir: Path) -> List[Path]:
     """
     Get all image files from directory using global extensions.
-    
+
     Args:
         images_dir: Directory containing images
-    
+
     Returns:
         List of image file paths
     """
@@ -305,22 +310,22 @@ def get_image_files(images_dir: Path) -> List[Path]:
 def dataset_statistics(dataset_dir: Path, splits: Optional[List[str]] = None) -> None:
     """
     Print comprehensive dataset statistics including class distributions.
-    
+
     Args:
         dataset_dir: Root directory of the dataset
         splits: List of splits to analyze (default: ["train", "val", "test"])
     """
     if splits is None:
         splits = DATASET_SPLITS
-    
+
     class_names = load_class_names(dataset_dir)
     overall_class_counts = defaultdict(int)
     overall_images = 0
     overall_objects = 0
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("DATASET STATISTICS")
-    print("="*50)
+    print("=" * 50)
 
     for split in splits:
         split_path = dataset_dir / split
@@ -359,12 +364,12 @@ def dataset_statistics(dataset_dir: Path, splits: Optional[List[str]] = None) ->
             )
             print(f"    {name} ({class_id}): {class_counts[class_id]}")
 
-    print("\n" + "="*30)
+    print("\n" + "=" * 30)
     print("OVERALL TOTALS")
-    print("="*30)
+    print("=" * 30)
     print(f"Total images: {overall_images}")
     print(f"Total objects: {overall_objects}")
-    
+
     for class_id in sorted(overall_class_counts):
         name = (
             class_names[class_id]
@@ -378,11 +383,12 @@ def dataset_statistics(dataset_dir: Path, splits: Optional[List[str]] = None) ->
 # DATASET MERGING AND SPLITTING UTILITIES
 
 
-def merge_dataset_splits(source_path: Path, output_path: Path, 
-                       splits: Optional[List[str]] = None) -> None:
+def merge_dataset_splits(
+    source_path: Path, output_path: Path, splits: Optional[List[str]] = None
+) -> None:
     """
     Merge train/val/test splits into a single flat dataset.
-    
+
     Args:
         source_path: Dataset with split directories
         output_path: Output directory for merged dataset
@@ -390,9 +396,9 @@ def merge_dataset_splits(source_path: Path, output_path: Path,
     """
     if splits is None:
         splits = DATASET_SPLITS
-    
+
     logger.info(f"Merging dataset splits from {source_path} to {output_path}")
-    
+
     # Create output directories
     (output_path / "images").mkdir(parents=True, exist_ok=True)
     (output_path / "labels").mkdir(parents=True, exist_ok=True)
@@ -436,15 +442,18 @@ def merge_dataset_splits(source_path: Path, output_path: Path,
     logger.info(f"Merge complete. Total images merged: {total_images}")
 
 
-def stratified_dataset_split(data_dir: Path, output_dir: Path,
-                            split_ratios: Optional[Dict[str, float]] = None,
-                            random_seed: int = DEFAULT_RANDOM_SEED) -> None:
+def stratified_dataset_split(
+    data_dir: Path,
+    output_dir: Path,
+    split_ratios: Optional[Dict[str, float]] = None,
+    random_seed: int = DEFAULT_RANDOM_SEED,
+) -> None:
     """
     Perform object-aware stratified dataset splitting.
-    
+
     Maintains class distribution across splits based on object counts,
     not just image counts for better balance in detection datasets.
-    
+
     Args:
         data_dir: Source dataset with images/labels directories
         output_dir: Output directory for split dataset
@@ -453,7 +462,7 @@ def stratified_dataset_split(data_dir: Path, output_dir: Path,
     """
     if split_ratios is None:
         split_ratios = DEFAULT_SPLIT_RATIOS
-    
+
     random.seed(random_seed)
     logger.info(f"Starting stratified split with ratios: {split_ratios}")
 
@@ -560,7 +569,7 @@ def stratified_dataset_split(data_dir: Path, output_dir: Path,
             total = total_class_counts[class_id]
             percentage = actual / total if total > 0 else 0
             logger.info(f"  Class {class_id}: {actual} ({percentage:.2%})")
-    
+
     logger.info(f"Stratified split complete. Output: {output_dir}")
 
 
@@ -1090,7 +1099,9 @@ def main_multi_object_cropping() -> None:
     crop_multi_objects(DATASET_SPLIT_DIR, DATASET_CLIPPED_SPLIT_DIR)
 
 
-def main_dataset_merge(source_dir: Optional[Path] = None, output_dir: Optional[Path] = None) -> None:
+def main_dataset_merge(
+    source_dir: Optional[Path] = None, output_dir: Optional[Path] = None
+) -> None:
     """Main function for dataset merging."""
     if source_dir is None:
         source_dir = DATASET_SPLIT_DIR
@@ -1099,7 +1110,9 @@ def main_dataset_merge(source_dir: Optional[Path] = None, output_dir: Optional[P
     merge_dataset_splits(source_dir, output_dir)
 
 
-def main_stratified_split(data_dir: Optional[Path] = None, output_dir: Optional[Path] = None) -> None:
+def main_stratified_split(
+    data_dir: Optional[Path] = None, output_dir: Optional[Path] = None
+) -> None:
     """Main function for stratified dataset splitting."""
     if data_dir is None:
         data_dir = Path("data_merged")
@@ -1118,13 +1131,13 @@ if __name__ == "__main__":
         "--action",
         choices=[
             "analyze_resolution",
-            "dataset_stats", 
+            "dataset_stats",
             "remap_labels",
             "convert_to_cls",
             "crop_single",
             "crop_multi",
             "merge_splits",
-            "stratified_split"
+            "stratified_split",
         ],
         required=True,
         help="Action to perform",
@@ -1175,7 +1188,8 @@ if __name__ == "__main__":
         merge_dataset_splits(args.input_dir, args.output_dir, args.splits)
     elif args.action == "stratified_split":
         stratified_dataset_split(
-            args.input_dir, args.output_dir, 
-            split_ratios=dict(zip(args.splits, [0.6, 0.2, 0.2][:len(args.splits)])),
-            random_seed=args.random_seed
+            args.input_dir,
+            args.output_dir,
+            split_ratios=dict(zip(args.splits, [0.6, 0.2, 0.2][: len(args.splits)])),
+            random_seed=args.random_seed,
         )

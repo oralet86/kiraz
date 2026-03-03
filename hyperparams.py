@@ -24,7 +24,7 @@ PATIENCE_DETECT = 15
 PATIENCE_CLS = 10
 DETERMINISTIC = False
 COS_LR = True
-WORKERS = max(1, int((os.cpu_count() or 1) * 0.75))
+WORKERS = max(1, int((os.cpu_count() or 1) * 0.5))
 AMP = True
 
 
@@ -166,10 +166,10 @@ HPO_DATABASE = {
 def get_training_config(task: str) -> Dict[str, Any]:
     """
     Get training configuration constants for a specific task.
-    
+
     Args:
         task: Either "detect" or "cls"
-    
+
     Returns:
         Dictionary containing training configuration parameters
     """
