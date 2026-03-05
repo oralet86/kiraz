@@ -16,8 +16,8 @@ EPOCHS_DETECT = 100
 EPOCHS_CLS = 100
 IMGSZ_DETECT = 640
 IMGSZ_CLS = 320
-BATCH_DETECT = 12
-BATCH_CLS = 64
+BATCH_DETECT = 40
+BATCH_CLS = 256
 CACHE_DETECT = True
 CACHE_CLS = False
 PATIENCE_DETECT = 15
@@ -31,10 +31,24 @@ AMP = True
 def get_default_cls_hyperparams() -> Dict[str, Any]:
     """Get default hyperparameters for classification tasks."""
     return {
-        "lr0": 1e-5,
-        "lrf": 0.01,
+        "lr0": 1e-4,
+        "lrf": 0.001,
         "optimizer": "AdamW",
         "dropout": 0.5,
+        # Disable YOLO augmentations when using pre-augmented data
+        "hsv_h": 0.0,
+        "hsv_s": 0.0,
+        "hsv_v": 0.0,
+        "degrees": 0.0,
+        "translate": 0.0,
+        "scale": 0.0,
+        "shear": 0.0,
+        "perspective": 0.0,
+        "flipud": 0.0,
+        "fliplr": 0.0,
+        "mosaic": 0.0,
+        "mixup": 0.0,
+        "copy_paste": 0.0,
     }
 
 
@@ -42,125 +56,33 @@ def get_default_detect_hyperparams() -> Dict[str, Any]:
     """Get default hyperparameters for detection tasks."""
     return {
         "lr0": 2e-4,
-        "lrf": 0.01,
-        "close_mosaic": 10,
-        "hsv_h": 0.02,
-        "hsv_s": 0.6,
-        "hsv_v": 0.35,
-        "degrees": 2.0,
-        "translate": 0.1,
-        "scale": 0.7,
-        "shear": 0.03,
-        "perspective": 0.0003,
-        "flipud": 0.0,
-        "fliplr": 0.5,
-        "mosaic": 1.0,
-        "mixup": 0.15,
-        "copy_paste": 0.4,
+        "lrf": 0.001,
         "box": 15.0,
         "iou": 0.5,
         "cls": 1.5,
         "dfl": 2.0,
-        "dropout": 0.4,
+        "dropout": 0.5,
         "optimizer": "AdamW",
+        # Disable YOLO augmentations when using pre-augmented data
+        "hsv_h": 0.0,
+        "hsv_s": 0.0,
+        "hsv_v": 0.0,
+        "degrees": 0.0,
+        "translate": 0.0,
+        "scale": 0.0,
+        "shear": 0.0,
+        "perspective": 0.0,
+        "flipud": 0.0,
+        "fliplr": 0.0,
+        "mosaic": 0.0,
+        "mixup": 0.0,
+        "copy_paste": 0.0,
+        "close_mosaic": 0,
     }
 
 
 # HPO-optimized hyperparameters database
-HPO_DATABASE = {
-    "yolo26l-cls": {
-        "lr0": 1e-5,
-        "lrf": 0.0109,
-        "momentum": 0.92931,
-        "weight_decay": 0.00036,
-        "warmup_epochs": 4.40498,
-        "warmup_momentum": 0.84146,
-        "optimizer": "AdamW",
-        "dropout": 0.3,
-        "hsv_h": 0.01658,
-        "hsv_s": 0.71563,
-        "hsv_v": 0.35893,
-        "degrees": 0.0,
-        "translate": 0.10378,
-        "scale": 0.71975,
-        "shear": 0.00017,
-        "perspective": 0.0,
-        "flipud": 0.02031,
-        "fliplr": 0.36274,
-        "close_mosaic": 10,
-    },
-    "yolo11l-cls": {
-        "lr0": 1.0e-05,
-        "lrf": 0.01321,
-        "momentum": 0.95,
-        "weight_decay": 0.00034,
-        "warmup_epochs": 2.34106,
-        "warmup_momentum": 0.76277,
-        "optimizer": "AdamW",
-        "dropout": 0.3,
-        "hsv_h": 0.01184,
-        "hsv_s": 0.73957,
-        "hsv_v": 0.27179,
-        "degrees": 6.0e-05,
-        "translate": 0.06962,
-        "scale": 0.57299,
-        "shear": 0.00999,
-        "perspective": 0.00052,
-        "flipud": 0.002,
-        "fliplr": 0.54033,
-        "close_mosaic": 10,
-    },
-    "yolov10m": {
-        "lr0": 0.0002,
-        "lrf": 0.00795,
-        "weight_decay": 0.00079,
-        "warmup_epochs": 2.10784,
-        "warmup_momentum": 0.70114,
-        "box": 12.3594,
-        "cls": 1.02625,
-        "dfl": 2.21652,
-        "hsv_h": 0.01824,
-        "hsv_s": 0.57608,
-        "hsv_v": 0.37906,
-        "degrees": 1.11108,
-        "translate": 0.08023,
-        "scale": 0.6,
-        "shear": 0.01,
-        "perspective": 0.0001,
-        "flipud": 0.00101,
-        "fliplr": 0.4,
-        "mosaic": 0.98719,
-        "mixup": 0.12889,
-        "copy_paste": 0.3,
-        "close_mosaic": 12,
-        "dropout": 0.20309,
-    },
-    "yolo11m": {
-        "lr0": 0.0002,
-        "lrf": 0.01076,
-        "weight_decay": 0.00074,
-        "warmup_epochs": 2.22615,
-        "warmup_momentum": 0.80868,
-        "box": 12.00302,
-        "cls": 1.61551,
-        "dfl": 1.50107,
-        "hsv_h": 0.01,
-        "hsv_s": 0.7,
-        "hsv_v": 0.32674,
-        "degrees": 1.24551,
-        "translate": 0.05,
-        "scale": 0.66014,
-        "shear": 0.01031,
-        "perspective": 0.0001,
-        "flipud": 0.01575,
-        "fliplr": 0.47184,
-        "mosaic": 1.0,
-        "mixup": 0.12691,
-        "copy_paste": 0.39598,
-        "close_mosaic": 11,
-        "dropout": 0.2,
-    },
-}
+HPO_DATABASE = {}
 
 
 def get_training_config(task: str) -> Dict[str, Any]:

@@ -2,26 +2,27 @@ from __future__ import annotations
 
 import argparse
 from ultralytics import YOLO
-from ultralytics.utils.metrics import box_iou
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 import torch
+import gc
 import time
 import numpy as np
 import random
 import os
-from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
+import pandas as pd
 from hyperparams import get_hyperparams, HPO_DATABASE
 from log import logger, add_log_file
 from paths import (
     RESULTS_DIR,
-    DATASET_CLS_DIR,
-    DATASET_COMBINED_DIR,
-    DATA_YAML,
     RESULTS_CSV,
+    DATASET_AUGMENTED_CLS_DIR,
+    DATASET_AUGMENTED_DETECT_DIR,
     MODELS_DIR,
 )
+# from paths import DATASET_COMBINED_DIR as DATASET_AUGMENTED_DETECT_DIR
+# from paths import DATASET_CLS_DIR as DATASET_AUGMENTED_CLS_DIR
 
 parser = argparse.ArgumentParser(
     description="Train a YOLO model (classification or detection)"
@@ -45,18 +46,17 @@ parser.add_argument(
     default=42,
     help="Random seed for reproducible training (default: 42)",
 )
+parser.add_argument(
+    "--epoch",
+    type=int,
+    help="Override the number of training epochs (for testing purposes)",
+)
 
 args = parser.parse_args()
 
-# Validate required arguments based on mode
-if args.mode == "cls":
-    if not args.model:
-        raise ValueError("--model is required for classification mode")
-    MODEL_NAME = args.model
-else:  # detect
-    if not args.model:
-        raise ValueError("--model is required for detection mode")
-    MODEL_NAME = args.model
+if not args.model:
+    raise ValueError("--model is required")
+MODEL_NAME = args.model
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -93,8 +93,6 @@ def set_seed(seed: int) -> None:
     # Set environment variable for additional libraries
     os.environ["PYTHONHASHSEED"] = str(seed)
 
-    logger.info("Random seeds set for reproducible training")
-
 
 def ensure_dataset_layout(dataset_dir: Path, mode: str) -> None:
     """Validate dataset structure based on mode."""
@@ -129,22 +127,27 @@ def ensure_dataset_layout(dataset_dir: Path, mode: str) -> None:
 
 def ensure_data_yaml(dataset_dir: Path, yaml_path: Path) -> None:
     """Create data.yaml for detection mode if it doesn't exist."""
-    if yaml_path.exists():
-        logger.info("Found existing data.yaml: %s", yaml_path)
+    # For augmented dataset, create yaml in the augmented dataset directory
+    augmented_yaml_path = dataset_dir / "data.yaml"
+
+    if augmented_yaml_path.exists():
+        logger.info(f"Found existing data.yaml: {augmented_yaml_path}")
         return
 
     yaml_text = (
         f"path: {dataset_dir.resolve().as_posix()}\n"
-        f"train: train/images\n"
-        f"val: val/images\n"
-        f"test: test/images\n"
-        f"\n"
-        f"names:\n"
-        f"  0: stem\n"
+        "train: train/images\n"
+        "val: val/images\n"
+        "test: test/images\n"
+        "\n"
+        "nc: 2\n"
+        "names:\n"
+        "  0: cherry\n"
+        "  1: stem\n"
     )
 
-    yaml_path.write_text(yaml_text, encoding="utf-8")
-    logger.info("Created data.yaml at: %s", yaml_path)
+    augmented_yaml_path.write_text(yaml_text, encoding="utf-8")
+    logger.info(f"Created data.yaml at: {augmented_yaml_path}")
 
 
 def _extract_metrics(results_obj: Any, mode: str) -> Dict[str, Any]:
@@ -193,232 +196,116 @@ def _extract_metrics(results_obj: Any, mode: str) -> Dict[str, Any]:
     return metrics
 
 
-def log_metrics(metrics: Dict[str, Any], mode: str, prefix: str = "Metrics") -> None:
-    """Log metrics to console based on mode."""
-    if not metrics:
-        logger.warning("%s: none found", prefix)
-        return
-
-    logger.info(prefix)
-
-    if mode == "cls":
-        preferred_order = [
-            "top1",
-            "roc_auc",
-            "precision",
-            "recall",
-            "f1",
-            "speed_preprocess_ms",
-            "speed_inference_ms",
-            "speed_postprocess_ms",
-        ]
-    else:  # detect
-        preferred_order = [
-            "box_map",
-            "box_map50",
-            "box_map75",
-            "box_f1",
-            "box_mp",
-            "box_mr",
-            "speed_preprocess_ms",
-            "speed_inference_ms",
-            "speed_postprocess_ms",
-        ]
-
-    # Log key metrics first
-    for key in preferred_order:
-        if key in metrics:
-            val = metrics[key]
-            if isinstance(val, float):
-                logger.info("  %-24s %.4f", key + ":", val)
-            else:
-                logger.info("  %-24s %s", key + ":", val)
-
-    # Log remaining metrics
-    remaining = sorted(k for k in metrics if k not in preferred_order)
-    for key in remaining:
-        val = metrics[key]
-        if isinstance(val, float):
-            logger.info("  %-24s %.4f", key + ":", val)
-        else:
-            logger.info("  %-24s %s", key + ":", val)
-
-
-def calculate_mean_iou_detect(
-    model: YOLO, dataset_dir: Path, split: str
-) -> Dict[str, float]:
-    """Calculate mean IoU for detection by matching predictions to ground truth using box_iou."""
-    img_dir = dataset_dir / split / "images"
-    lbl_dir = dataset_dir / split / "labels"
-
-    if not img_dir.exists():
-        return {}
-
-    iou_values: List[float] = []
-
-    for img_path in img_dir.glob("*"):
-        if img_path.suffix.lower() not in [".jpg", ".jpeg", ".png", ".bmp"]:
-            continue
-
-        lbl_path = lbl_dir / f"{img_path.stem}.txt"
-        if not lbl_path.exists():
-            continue
-
-        try:
-            results = model(str(img_path), verbose=False)
-            preds = results[0].boxes
-            if preds is None or len(preds) == 0:
-                continue
-
-            pred_xyxy = preds.xyxy  # (N, 4) tensor
-
-            # Load ground truth in YOLO format and convert to xyxy
-            img = results[0].orig_img
-            h, w = img.shape[:2]
-            gt_boxes: List[List[float]] = []
-            with open(lbl_path, "r") as f:
-                for line in f:
-                    parts = line.strip().split()
-                    if len(parts) < 5:
-                        continue
-                    _, cx, cy, bw, bh = map(float, parts[:5])
-                    x1 = (cx - bw / 2) * w
-                    y1 = (cy - bh / 2) * h
-                    x2 = (cx + bw / 2) * w
-                    y2 = (cy + bh / 2) * h
-                    gt_boxes.append([x1, y1, x2, y2])
-
-            if not gt_boxes:
-                continue
-
-            gt_xyxy = torch.tensor(
-                gt_boxes, dtype=torch.float32, device=pred_xyxy.device
-            )
-
-            # box_iou returns (N_pred, N_gt) matrix; take max IoU per GT box
-            iou_matrix = box_iou(pred_xyxy, gt_xyxy)  # (N_pred, N_gt)
-            matched_iou = iou_matrix.max(dim=0).values  # best pred IoU per GT
-            iou_values.extend(matched_iou.cpu().tolist())
-
-        except Exception as e:
-            logger.warning("IoU calculation failed for %s: %s", img_path.name, e)
-
-    if not iou_values:
-        return {}
-
-    return {"mean_iou": float(np.mean(iou_values))}
-
-
-def calculate_additional_metrics_cls(
-    model: YOLO, val_files: List[str], dataset_dir: Path
-) -> Dict[str, float]:
-    """Calculate precision, recall, F1, and ROC-AUC for classification."""
-    try:
-        # Get predictions for validation files
-        y_true = []
-        y_pred = []
-        y_scores = []  # For ROC-AUC (probability scores)
-
-        class_dirs = sorted(
-            [d for d in (dataset_dir / "train").iterdir() if d.is_dir()]
-        )
-        class_names = [d.name for d in class_dirs]
-
-        for file_path in val_files:
-            # True label
-            true_class = Path(file_path).parent.name
-            true_label = class_names.index(true_class)
-            y_true.append(true_label)
-
-            # Predicted label and probabilities
-            results = model(file_path)
-            pred_class = results[0].probs.top1
-            y_pred.append(pred_class)
-
-            # Get probability scores for ROC-AUC (probability of positive class)
-            # For binary classification, we'll use the probability of class 1
-            probs = results[0].probs.data
-            if len(probs) == 2:  # Binary classification
-                y_scores.append(float(probs[1]))  # Probability of class 1
-            else:
-                y_scores.append(
-                    float(probs[pred_class])
-                )  # Fallback to predicted class prob
-
-        # Calculate metrics
-        precision, recall, f1, _ = precision_recall_fscore_support(
-            y_true, y_pred, average="weighted", zero_division=0
-        )
-
-        # Calculate ROC-AUC for binary classification
-        roc_auc = 0.0
-        if len(set(y_true)) == 2:  # Only for binary classification
-            try:
-                roc_auc = roc_auc_score(y_true, y_scores)
-            except Exception as e:
-                logger.warning("Could not calculate ROC-AUC: %s", e)
-
-        return {"precision": precision, "recall": recall, "f1": f1, "roc_auc": roc_auc}
-    except Exception as e:
-        logger.warning("Could not calculate additional metrics: %s", e)
-        return {}
-
-
 def log_results_to_file(
     model_name: str, metrics: Dict[str, Any], train_time: float, mode: str
 ) -> None:
-    """Append results to unified results.csv file."""
+    """Append results to unified results.csv file using pandas."""
     # Use val split inference speed as representative inference time
     inference_time = metrics.get("val_speed_inference_ms", 0.0)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    results_file = RESULTS_CSV
+    row_data: Dict[str, Any] = {}
 
-    # Unified header for both modes; primary metric column named generically
-    if not results_file.exists():
-        header = "model_name,mode,seed,train_primary,train_prec,train_recall,train_f1,val_primary,val_prec,val_recall,val_f1,test_primary,test_prec,test_recall,test_f1,train_time,inference_time,timestamp\n"
-        try:
-            with open(results_file, "w", encoding="utf-8") as f:
-                f.write(header)
-        except (IOError, OSError) as e:
-            logger.error("Failed to create results file: %s", e)
-            return
+    # Basic info
+    row_data.update(
+        {
+            "model_name": model_name,
+            "mode": mode,
+            "seed": args.seed,
+            "timestamp": timestamp,
+            "train_time": train_time,
+            "inference_time": inference_time,
+        }
+    )
 
+    # Primary metrics (different for each mode)
     if mode == "cls":
-        train_primary = metrics.get("train_top1", 0.0)
-        val_primary = metrics.get("val_top1", 0.0)
-        test_primary = metrics.get("test_top1", 0.0)
+        row_data.update(
+            {
+                "train_primary": metrics.get("train_top1", np.nan),
+                "val_primary": metrics.get("val_top1", np.nan),
+                "test_primary": metrics.get("test_top1", np.nan),
+            }
+        )
     else:  # detect
-        train_primary = metrics.get("train_box_map50", 0.0)
-        val_primary = metrics.get("val_box_map50", 0.0)
-        test_primary = metrics.get("test_box_map50", 0.0)
+        row_data.update(
+            {
+                "train_primary": metrics.get("train_box_map50", np.nan),
+                "val_primary": metrics.get("val_box_map50", np.nan),
+                "test_primary": metrics.get("test_box_map50", np.nan),
+            }
+        )
 
-    train_prec = metrics.get("train_precision", 0.0)
-    train_recall = metrics.get("train_recall", 0.0)
-    train_f1 = metrics.get("train_f1", 0.0)
-    val_prec = metrics.get("val_precision", 0.0)
-    val_recall = metrics.get("val_recall", 0.0)
-    val_f1 = metrics.get("val_f1", 0.0)
-    test_prec = metrics.get("test_precision", 0.0)
-    test_recall = metrics.get("test_recall", 0.0)
-    test_f1 = metrics.get("test_f1", 0.0)
+    # Classification metrics (only for classification mode)
+    cls_metrics = ["top1"]
+    for split in ["train", "val", "test"]:
+        for metric in cls_metrics:
+            key = f"{split}_{metric}"
+            row_data[key] = metrics.get(key, np.nan) if mode == "cls" else np.nan
 
-    line = f'"{model_name}",{mode},{args.seed},{train_primary:.6f},{train_prec:.6f},{train_recall:.6f},{train_f1:.6f},{val_primary:.6f},{val_prec:.6f},{val_recall:.6f},{val_f1:.6f},{test_primary:.6f},{test_prec:.6f},{test_recall:.6f},{test_f1:.6f},{train_time:.2f},{inference_time:.2f},"{timestamp}"\n'
+    # Detection metrics (only for detection mode)
+    det_metrics = [
+        "box_map",
+        "box_map50",
+        "box_map75",
+        "box_f1",
+        "box_mp",
+        "box_mr",
+    ]
+    for split in ["train", "val", "test"]:
+        for metric in det_metrics:
+            key = f"{split}_{metric}"
+            row_data[key] = metrics.get(key, np.nan) if mode == "detect" else np.nan
 
+    # Common metrics (precision, recall, f1)
+    common_metrics = ["precision", "recall", "f1"]
+    for split in ["train", "val", "test"]:
+        for metric in common_metrics:
+            key = f"{split}_{metric}"
+            row_data[key] = metrics.get(key, np.nan)
+
+    # Speed metrics
+    speed_metrics = [
+        "speed_preprocess_ms",
+        "speed_inference_ms",
+        "speed_postprocess_ms",
+    ]
+    for split in ["train", "val", "test"]:
+        for metric in speed_metrics:
+            key = f"{split}_{metric}"
+            row_data[key] = metrics.get(key, np.nan)
+
+    # Load existing CSV or create new DataFrame
+    if RESULTS_CSV.exists():
+        try:
+            df = pd.read_csv(RESULTS_CSV)
+        except Exception as e:
+            logger.error(f"Failed to read existing results.csv: {e}")
+            df = pd.DataFrame()
+    else:
+        df = pd.DataFrame()
+
+    # Append new row
+    new_row = pd.DataFrame([row_data])
+    df = pd.concat([df, new_row], ignore_index=True)
+
+    # Save to CSV
     try:
-        with open(results_file, "a", encoding="utf-8") as f:
-            f.write(line)
-    except (IOError, OSError) as e:
-        logger.error("Failed to write results to file: %s", e)
+        df.to_csv(RESULTS_CSV, index=False)
+        logger.info(f"Results saved to {RESULTS_CSV}")
+    except Exception as e:
+        logger.error(f"Failed to save results: {e}")
 
 
-def train_model(ts: str, mode: str) -> Tuple[Path, Dict[str, Any], float]:
+def train_model(ts: str, mode: str) -> Tuple[Path, float]:
     """Train model based on mode."""
-    # Use appropriate dataset based on mode
-    dataset_dir = DATASET_CLS_DIR if mode == "cls" else DATASET_COMBINED_DIR
-    data_yaml = DATA_YAML if mode == "detect" else None
+    # Use augmented dataset based on mode
+    dataset_dir = (
+        DATASET_AUGMENTED_CLS_DIR if mode == "cls" else DATASET_AUGMENTED_DETECT_DIR
+    )
+    data_yaml = dataset_dir / "data.yaml" if mode == "detect" else None
 
-    logger.info("Validating dataset layout under %s", dataset_dir)
+    logger.info(f"Validating dataset layout under {dataset_dir}")
     ensure_dataset_layout(dataset_dir, mode)
 
     if mode == "detect":
@@ -432,17 +319,22 @@ def train_model(ts: str, mode: str) -> Tuple[Path, Dict[str, Any], float]:
     else:
         logger.info(f"Using model from: {MODEL_PATH}")
 
-    logger.info("Loading base model: %s", MODEL_PATH)
+    logger.info(f"Loading base model: {MODEL_PATH}")
     model = YOLO(str(MODEL_PATH), task="classify" if mode == "cls" else "detect")
 
     if torch.cuda.is_available():
         device_name = torch.cuda.get_device_name(0)
-        logger.info("Using CUDA device: %s", device_name)
+        logger.info(f"Using CUDA device: {device_name}")
     else:
         logger.info("Using CPU")
 
     # Get hyperparameters based on flag
     hyperparams = get_hyperparams(MODEL_NAME, hpo=args.hpo)
+
+    # Override epochs if --epoch flag is provided
+    if args.epoch is not None:
+        hyperparams["epochs"] = args.epoch
+        logger.info(f"Overriding epochs to {args.epoch} for testing")
 
     # Determine parameter type for logging
     model_name_lower = MODEL_NAME.lower()
@@ -450,7 +342,7 @@ def train_model(ts: str, mode: str) -> Tuple[Path, Dict[str, Any], float]:
         param_type = f"HPO-optimized ({model_name_lower})"
     else:
         param_type = "default"
-    logger.info("Using %s hyperparameters", param_type)
+    logger.info(f"Using {param_type} hyperparameters")
 
     logger.info("Starting training...")
     start_time = time.time()
@@ -471,14 +363,11 @@ def train_model(ts: str, mode: str) -> Tuple[Path, Dict[str, Any], float]:
             **hyperparams,
         )
     except Exception as e:
-        logger.error("Training failed: %s", e)
+        logger.error(f"Training failed: {e}")
         raise RuntimeError(f"Training failed: {e}") from e
 
     if results is None:
         raise RuntimeError("Training did not return a results object")
-
-    # Get training metrics
-    train_metrics = _extract_metrics(results, mode)
 
     best_path = Path(results.save_dir) / "weights" / "best.pt"
     if not best_path.exists():
@@ -487,79 +376,60 @@ def train_model(ts: str, mode: str) -> Tuple[Path, Dict[str, Any], float]:
         )
 
     train_time = time.time() - start_time
-    logger.info("Training complete. Best weights: %s", best_path)
+    logger.info(f"Training complete. Best weights: {best_path}")
 
     best_model = YOLO(best_path)
-    best_model.export(format="onnx")
+    best_model.export(format="onnx", opset=20)
 
-    return best_path, train_metrics, train_time
+    return best_path, train_time
 
 
 def evaluate_on_splits(best_weights: Path, ts: str, mode: str) -> Dict[str, Any]:
-    """Evaluate model on train, val, and test splits."""
+    """Evaluate model on train, val, and test splits using batch evaluation."""
     model = YOLO(best_weights)
     all_metrics = {}
 
-    # Use appropriate dataset based on mode
-    dataset_dir = DATASET_CLS_DIR if mode == "cls" else DATASET_COMBINED_DIR
-    data_yaml = DATA_YAML if mode == "detect" else None
+    # Use augmented dataset based on mode
+    dataset_dir = (
+        DATASET_AUGMENTED_CLS_DIR if mode == "cls" else DATASET_AUGMENTED_DETECT_DIR
+    )
+    data_yaml = dataset_dir / "data.yaml" if mode == "detect" else None
 
     # Evaluation data parameter differs by mode
     eval_data = str(dataset_dir.resolve()) if mode == "cls" else str(data_yaml)
 
+    hyperparams = get_hyperparams(MODEL_NAME, hpo=args.hpo)
+
     # Evaluate on all splits
     for split in ["train", "val", "test"]:
-        logger.info("Evaluating on %s split...", split)
+        logger.info(f"Evaluating on {split} split...")
 
-        try:
-            split_results = model.val(
-                data=eval_data,
-                split=split,
-                device=DEVICE,
-                project=str(RESULTS_DIR),
-                name=f"{ts}-{split}",
-                exist_ok=True,
-            )
-        except Exception as e:
-            logger.error("Failed to evaluate on %s split: %s", split, e)
-            continue
+        # Clear GPU memory before evaluation
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gc.collect()
+
+        split_results = model.val(
+            data=eval_data,
+            split=split,
+            device=DEVICE,
+            project=str(RESULTS_DIR),
+            name=f"{ts}-{split}",
+            exist_ok=True,
+            batch=(hyperparams.get("batch", 16)) * 2,
+        )
 
         # Extract metrics and add split prefix
         split_metrics = _extract_metrics(split_results, mode)
         for key, value in split_metrics.items():
             all_metrics[f"{split}_{key}"] = value
 
-        # Calculate additional metrics based on mode
-        if mode == "cls":
-            # For classification, calculate precision, recall, F1
-            split_files = []
-            split_dir = dataset_dir / split
-            for class_dir in split_dir.iterdir():
-                if class_dir.is_dir():
-                    for img_file in class_dir.glob("*"):
-                        if img_file.suffix.lower() in [".jpg", ".jpeg", ".png", ".bmp"]:
-                            split_files.append(str(img_file))
+        # For detection, map YOLO's metrics to common names
+        if mode == "detect":
+            all_metrics[f"{split}_precision"] = split_metrics.get("box_mp", 0.0)
+            all_metrics[f"{split}_recall"] = split_metrics.get("box_mr", 0.0)
+            all_metrics[f"{split}_f1"] = split_metrics.get("box_f1", 0.0)
 
-            additional_metrics = calculate_additional_metrics_cls(
-                model, split_files, dataset_dir
-            )
-            for key, value in additional_metrics.items():
-                all_metrics[f"{split}_{key}"] = value
-        else:  # detect
-            # For detection, derive precision, recall, F1 from YOLO's val() metrics (box_mp, box_mr)
-            prec = split_metrics.get("box_mp", 0.0)
-            rec = split_metrics.get("box_mr", 0.0)
-            f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
-            all_metrics[f"{split}_precision"] = prec
-            all_metrics[f"{split}_recall"] = rec
-            all_metrics[f"{split}_f1"] = f1
-
-            iou_metrics = calculate_mean_iou_detect(model, dataset_dir, split)
-            for key, value in iou_metrics.items():
-                all_metrics[f"{split}_{key}"] = value
-
-    # Log all metrics
-    log_metrics(all_metrics, mode)
     return all_metrics
 
 
@@ -581,16 +451,17 @@ def main() -> None:
     )
 
     # Train model
-    best_weights, train_metrics, train_time = train_model(ts, args.mode)
+    best_weights, train_time = train_model(ts, args.mode)
 
     # Evaluate on all splits
     all_metrics = evaluate_on_splits(best_weights, ts, args.mode)
 
-    # Combine train metrics with evaluation metrics
-    all_metrics.update(train_metrics)
-
     # Log results
     log_results_to_file(MODEL_NAME, all_metrics, train_time, args.mode)
+
+    logger.info("\nTRAINING COMPLETED")
+    logger.info(f"Model: {MODEL_NAME} ({args.mode}) - Seed: {args.seed}")
+    logger.info(f"Train Time: {train_time:.2f}s")
 
     logger.info("Training completed in %.2f seconds", train_time)
 

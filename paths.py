@@ -15,8 +15,6 @@ from pathlib import Path
 
 # Results directories
 RESULTS_DIR = Path("results")
-RESULTS_CLS_DIR = Path("results_cls")
-RESULTS_DETECT_DIR = Path("results_detect")
 RESULTS_HPO_CLS_DIR = Path("results_hpo_cls")
 RESULTS_HPO_DETECT_DIR = Path("results_hpo_detect")
 
@@ -26,6 +24,8 @@ DATASET_COMBINED_DIR = Path("datasets/data_combined")
 DATASET_SPLIT_DIR = Path("datasets/data_split")
 DATASET_CLIPPED_SPLIT_DIR = Path("datasets/data_clipped_split")
 DATASET_CLS_ALT_DIR = Path("datasets/data_cls")
+DATASET_AUGMENTED_CLS_DIR = Path("datasets/augmented_cls")
+DATASET_AUGMENTED_DETECT_DIR = Path("datasets/augmented_detect")
 
 # Logs directory
 LOGS_DIR = Path("logs")
@@ -39,13 +39,9 @@ MODELS_DIR = Path("models")
 DATA_YAML = DATASET_COMBINED_DIR / "data.yaml"
 
 # Results CSV files
-RESULTS_CSV = Path("results.csv")
-RESULTS_CLS_CSV = Path("results_cls.csv")
-RESULTS_DETECT_CSV = Path("results_detect.csv")
+RESULTS_CSV = RESULTS_DIR / Path("results.csv")
 RESULTS_HPO_CLS_CSV = Path("results_hpo_cls.csv")
 RESULTS_HPO_DETECT_CSV = Path("results_hpo_detect.csv")
-HPO_RESULTS_CLS_CSV = Path("hpo_results_cls.csv")
-HPO_RESULTS_DETECT_CSV = Path("hpo_results_detect.csv")
 
 # Log files
 UNIVERSAL_LOG_FILE = LOGS_DIR / "logs.log"
@@ -122,8 +118,6 @@ def ensure_directories() -> None:
     """
     directories = [
         RESULTS_DIR,
-        RESULTS_CLS_DIR, 
-        RESULTS_DETECT_DIR,
         RESULTS_HPO_CLS_DIR,
         RESULTS_HPO_DETECT_DIR,
         LOGS_DIR,
@@ -133,6 +127,8 @@ def ensure_directories() -> None:
         DATASET_SPLIT_DIR,
         DATASET_CLIPPED_SPLIT_DIR,
         DATASET_CLS_ALT_DIR,
+        DATASET_AUGMENTED_CLS_DIR,
+        DATASET_AUGMENTED_DETECT_DIR,
     ]
 
     for directory in directories:
@@ -145,8 +141,6 @@ if __name__ == "__main__":
 
     print("\nCore Directories:")
     print(f"  RESULTS_DIR: {RESULTS_DIR}")
-    print(f"  RESULTS_CLS_DIR: {RESULTS_CLS_DIR}")
-    print(f"  RESULTS_DETECT_DIR: {RESULTS_DETECT_DIR}")
     print(f"  RESULTS_HPO_CLS_DIR: {RESULTS_HPO_CLS_DIR}")
     print(f"  RESULTS_HPO_DETECT_DIR: {RESULTS_HPO_DETECT_DIR}")
     print(f"  LOGS_DIR: {LOGS_DIR}")
