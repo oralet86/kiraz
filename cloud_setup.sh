@@ -63,29 +63,7 @@ echo "--- Installing gdown for Google Drive Downloads ---"
 pip install gdown
 
 echo "--- Downloading Datasets ---"
-if [ -f ".env" ]; then
-    # Extract GOOGLE_DRIVE_DATASET_URL from .env (skip comments and empty lines)
-    GOOGLE_DRIVE_URL=$(grep "^GOOGLE_DRIVE_DATASET_URL=" .env | cut -d'=' -f2)
-    
-    if [ ! -z "$GOOGLE_DRIVE_URL" ]; then
-        echo "Downloading datasets from Google Drive..."
-        gdown --fuzzy "$GOOGLE_DRIVE_URL" --output datasets.zip
-        
-        if [ -f "datasets.zip" ]; then
-            echo "Extracting datasets..."
-            unzip -q datasets.zip
-            rm datasets.zip
-            echo "Datasets setup complete!"
-        else
-            echo "Failed to download datasets.zip"
-        fi
-    else
-        echo "GOOGLE_DRIVE_DATASET_URL not found in .env file"
-    fi
-else
-    echo "No .env file found. Skipping dataset download."
-    echo "Create .env file with: GOOGLE_DRIVE_DATASET_URL=https://drive.google.com/uc?id=YOUR_FILE_ID"
-fi
+python download_datasets.py
 
 echo "--- Setup Complete ---"
 echo "To activate your environment, run: source .venv/bin/activate"
