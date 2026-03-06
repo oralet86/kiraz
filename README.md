@@ -45,8 +45,6 @@ Train and evaluate multiple architectures on a cherry dataset across 5 random se
 
 - `requirements.txt` - Python dependencies
 
-## Core Infrastructure
-
 ### paths.py
 
 **Path Generation Functions:**
