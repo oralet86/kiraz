@@ -337,59 +337,32 @@ def train_model(ts: str, mode: str) -> Tuple[Path, float]:
     best_model = YOLO(best_path)
     best_model.export(format="onnx", opset=20)
 
-    # Aggressive cleanup after export
-    logger.info("Starting aggressive cleanup after training and export...")
-
-    # Delete model references explicitly
-    del best_model
+    # Clean up training model and results, keep best_model for evaluation
     del model
     del results
 
-    # Synchronize CUDA to ensure all operations complete
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-
-    # Multiple rounds of aggressive cleanup
-    for _ in range(3):
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    # Final synchronization and cache clear
     if torch.cuda.is_available():
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
 
-        # Log final memory state
-        allocated = torch.cuda.memory_allocated() / 1024**3
-        cached = torch.cuda.memory_reserved() / 1024**3
-        logger.info(
-            f"Post-training cleanup - Allocated: {allocated:.2f}GB, Cached: {cached:.2f}GB"
-        )
-
-    return best_path, train_time
+    return best_path, best_model, train_time
 
 
-def evaluate_on_splits(best_weights: Path, ts: str, mode: str) -> Dict[str, Any]:
-    """Evaluate model on train, val, and test splits."""
-    model = YOLO(best_weights)
+def evaluate_on_splits(model: YOLO, ts: str, mode: str) -> Dict[str, Any]:
+    """Evaluate model on val and test splits."""
     all_metrics: Dict[str, Any] = {}
 
     dataset_dir = (
         DATASET_CLS_AUGMENTED_DIR if mode == "cls" else DATASET_DETECT_AUGMENTED_DIR
     )
     hyperparams = get_hyperparams(MODEL_NAME, hpo=args.hpo)
-    if "batch" in hyperparams:
-        original_batch = hyperparams["batch"]
-        scaled_batch = int(original_batch * args.batch_mult)
-        # Ensure even integer, roll down if odd
-        if scaled_batch % 2 != 0:
-            scaled_batch -= 1
-        # Ensure at least 2
-        eval_batch = max(2, scaled_batch)
+    original_batch = hyperparams.get("batch", 8)
+    scaled_batch = int(original_batch * args.batch_mult)
+    if scaled_batch % 2 != 0:
+        scaled_batch -= 1
+    eval_batch = max(2, scaled_batch)
 
-    for split in ["train", "val", "test"]:
+    for split in ["val", "test"]:
         logger.info(f"Evaluating on {split} split...")
 
         if mode == "cls":
@@ -418,7 +391,6 @@ def evaluate_on_splits(best_weights: Path, ts: str, mode: str) -> Dict[str, Any]
         for key, value in split_metrics.items():
             all_metrics[f"{split}_{key}"] = value
 
-    # Cleanup model after all evaluations
     del model
     if torch.cuda.is_available():
         torch.cuda.synchronize()
@@ -428,13 +400,7 @@ def evaluate_on_splits(best_weights: Path, ts: str, mode: str) -> Dict[str, Any]
 
 
 def cleanup_cuda() -> None:
-    """Clean up CUDA memory with optional aggressive cleanup.
-
-    Args:
-        aggressive: If True, performs more thorough cleanup including
-                   forcing garbage collection across all generations and
-                   resetting peak memory stats.
-    """
+    """Clean up CUDA memory with optional aggressive cleanup."""
     if torch.cuda.is_available():
         # Force garbage collection across all generations
         for _ in range(2):
@@ -476,13 +442,12 @@ def main() -> None:
     cleanup_cuda()
 
     # Train model
-    best_weights, train_time = train_model(ts, args.mode)
+    best_weights, best_model, train_time = train_model(ts, args.mode)
 
     cleanup_cuda()
 
-    # Evaluate on all splits
-    cleanup_cuda()  # Cleanup before evaluation
-    all_metrics = evaluate_on_splits(best_weights, ts, args.mode)
+    # Evaluate on val and test splits
+    all_metrics = evaluate_on_splits(best_model, ts, args.mode)
 
     # Log results
     log_results_to_file(MODEL_NAME, all_metrics, train_time, args.mode)
