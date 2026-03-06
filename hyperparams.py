@@ -9,18 +9,19 @@ parameters for specific models.
 from typing import Any, Dict
 import os
 import warnings
-
+import torch
 
 # Global training constants
 EPOCHS_DETECT = 100
 EPOCHS_CLS = 100
 IMGSZ_DETECT = 640
 IMGSZ_CLS = 320
-BATCH_DETECT = 40
-BATCH_CLS = 256
+# Base batch sizes per GB of VRAM
+BASE_BATCH_DETECT = 4
+BASE_BATCH_CLS = 32
 CACHE_DETECT = True
 CACHE_CLS = False
-PATIENCE_DETECT = 15
+PATIENCE_DETECT = 10
 PATIENCE_CLS = 10
 DETERMINISTIC = False
 COS_LR = True
@@ -28,10 +29,56 @@ WORKERS = max(1, int((os.cpu_count() or 1) * 0.5))
 AMP = True
 
 
+def get_vram_gb() -> float:
+    """Get available VRAM in GB."""
+    # Assume torch is available and CUDA is available as requested
+    total_vram = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    return total_vram
+
+
+def get_scaled_batch_size(base_batch: int, vram_gb: float = None) -> int:
+    """
+    Scale batch size based on available VRAM.
+
+    Args:
+        base_batch: Base batch size per GB of VRAM
+        vram_gb: Available VRAM in GB (auto-detected if None)
+
+    Returns:
+        Scaled batch size (ensured to be even and at least 2)
+    """
+    if vram_gb is None:
+        vram_gb = get_vram_gb()
+
+    # Round VRAM up to integer and multiply by base batch
+    vram_int = int(vram_gb) + (1 if vram_gb % 1 >= 0.5 else 0)  # Round up
+    scaled = base_batch * vram_int
+
+    # Ensure even integer, roll down if odd
+    if scaled % 2 != 0:
+        scaled -= 1
+
+    # Ensure at least 2
+    return max(2, scaled)
+
+
+# Dynamic batch sizes based on available VRAM
+VRAM_GB = get_vram_gb()
+BATCH_DETECT = get_scaled_batch_size(BASE_BATCH_DETECT, VRAM_GB)
+BATCH_CLS = get_scaled_batch_size(BASE_BATCH_CLS, VRAM_GB)
+
+# Log VRAM detection and batch scaling
+device_name = torch.cuda.get_device_name(0)
+print(f"Detected {VRAM_GB:.1f}GB VRAM on {device_name}")
+print(
+    f"Batch sizes scaled for {VRAM_GB:.1f}GB VRAM: detect={BATCH_DETECT}, cls={BATCH_CLS}"
+)
+
+
 def get_default_cls_hyperparams() -> Dict[str, Any]:
     """Get default hyperparameters for classification tasks."""
     return {
-        "lr0": 1e-4,
+        "lr0": 1e-6,
         "lrf": 0.001,
         "optimizer": "AdamW",
         "dropout": 0.5,
@@ -55,7 +102,7 @@ def get_default_cls_hyperparams() -> Dict[str, Any]:
 def get_default_detect_hyperparams() -> Dict[str, Any]:
     """Get default hyperparameters for detection tasks."""
     return {
-        "lr0": 2e-4,
+        "lr0": 4e-5,
         "lrf": 0.001,
         "box": 15.0,
         "iou": 0.5,

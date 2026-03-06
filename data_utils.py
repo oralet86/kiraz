@@ -940,6 +940,147 @@ def crop_flat_dataset(
     logger.info(f"Flat crop complete: {total_images} images processed")
 
 
+def crop_flat_dataset_to_cls_format(
+    input_dir: Path,
+    output_dir: Path,
+    class_mapping: Optional[Dict[int, str]] = None,
+    buffer_ratio: float = DEFAULT_BUFFER_RATIO,
+) -> None:
+    """
+    Crop each individual object in a flat YOLO dataset and write directly to
+    classification folder structure (output_dir/<class_name>/<stem>_<idx>.jpg).
+
+    Each object gets its own cropped image. Images with no matching label objects
+    are skipped. The output contains no YOLO labels.
+
+    Args:
+        input_dir: Flat dataset with images/ and labels/ at root
+        output_dir: Output directory; will contain one subfolder per class name
+        class_mapping: Dict mapping class_id -> class_name
+                       (default: {0: "cherry", 1: "cherry-imperfect"})
+        buffer_ratio: Buffer around each object as a fraction of its size
+    """
+    if class_mapping is None:
+        class_mapping = CLASSIFICATION_MAPPING
+
+    img_dir = input_dir / "images"
+    lbl_dir = input_dir / "labels"
+
+    if not img_dir.exists():
+        raise ValueError(f"Images directory not found: {img_dir}")
+
+    for class_name in class_mapping.values():
+        (output_dir / class_name).mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Cropping objects to cls format from {input_dir} to {output_dir}")
+    logger.info(f"Buffer ratio: {buffer_ratio}, class mapping: {class_mapping}")
+
+    total_crops = 0
+
+    for img_path in img_dir.glob("*"):
+        if img_path.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+
+        label_path = lbl_dir / f"{img_path.stem}.txt"
+        if not label_path.exists():
+            continue
+
+        try:
+            img = cv2.imread(str(img_path))
+            if img is None:
+                continue
+
+            h_orig, w_orig = img.shape[:2]
+            polygons = load_yolo_polygons(label_path, w_orig, h_orig)
+
+            for idx, (cls_id, pts) in enumerate(polygons):
+                if cls_id not in class_mapping:
+                    continue
+
+                x1, y1, x2, y2 = calculate_crop_bounds(
+                    pts, buffer_ratio, w_orig, h_orig
+                )
+                crop = img[y1:y2, x1:x2]
+
+                class_name = class_mapping[cls_id]
+                out_path = (
+                    output_dir / class_name / f"{img_path.stem}_{idx}{img_path.suffix}"
+                )
+                cv2.imwrite(str(out_path), crop)
+                total_crops += 1
+
+        except Exception as e:
+            logger.error(f"Error processing {img_path}: {e}")
+
+    logger.info(f"Per-object crop complete: {total_crops} crops written")
+
+
+def stratified_cls_split(
+    input_dir: Path,
+    output_dir: Path,
+    split_ratios: Optional[Dict[str, float]] = None,
+    random_seed: int = DEFAULT_RANDOM_SEED,
+) -> None:
+    """
+    Perform a stratified split of a flat classification dataset.
+
+    Input structure:  input_dir/<class_name>/<image files>
+    Output structure: output_dir/<split>/<class_name>/<image files>
+
+    Each class is split independently to preserve class distribution across splits.
+
+    Args:
+        input_dir: Flat cls dataset with one subfolder per class
+        output_dir: Output directory for the split dataset
+        split_ratios: Split ratios (default: {"train": 0.6, "val": 0.2, "test": 0.2})
+        random_seed: Random seed for reproducible splits
+    """
+    if split_ratios is None:
+        split_ratios = DEFAULT_SPLIT_RATIOS
+
+    random.seed(random_seed)
+    logger.info(f"Starting stratified cls split with ratios: {split_ratios}")
+
+    class_dirs = [d for d in input_dir.iterdir() if d.is_dir()]
+    if not class_dirs:
+        raise ValueError(f"No class subdirectories found in {input_dir}")
+
+    for split in split_ratios:
+        for class_dir in class_dirs:
+            (output_dir / split / class_dir.name).mkdir(parents=True, exist_ok=True)
+
+    for class_dir in class_dirs:
+        images = [
+            p for p in class_dir.glob("*") if p.suffix.lower() in IMAGE_EXTENSIONS
+        ]
+        random.shuffle(images)
+
+        n = len(images)
+        splits_list = list(split_ratios.keys())
+        ratios_list = list(split_ratios.values())
+
+        boundaries = [0]
+        cumulative = 0.0
+        for ratio in ratios_list[:-1]:
+            cumulative += ratio
+            boundaries.append(int(round(n * cumulative)))
+        boundaries.append(n)
+
+        for split_idx, split in enumerate(splits_list):
+            split_images = images[boundaries[split_idx] : boundaries[split_idx + 1]]
+            dest_dir = output_dir / split / class_dir.name
+            for img_path in split_images:
+                shutil.copy2(img_path, dest_dir / img_path.name)
+
+        counts = {
+            splits_list[i]: boundaries[i + 1] - boundaries[i]
+            for i in range(len(splits_list))
+        }
+        logger.info(f"  Class '{class_dir.name}': {n} images → {counts}")
+
+    logger.info(f"Stratified cls split complete. Output: {output_dir}")
+
+
 # DATASET CONVERSION UTILITIES
 
 
@@ -1388,11 +1529,11 @@ def run_full_dataset_pipeline() -> None:
     Pipeline steps:
     1. original (flat) -> data_detect_remapped (flat): remap cherry/cherry-imperfect->0, stem->1
     2. original (flat) -> data_cls_remapped (flat): keep cherry(0) and cherry-imperfect(1), drop stem
-    3. data_cls_remapped (flat) -> data_cls_clipped (flat): crop around objects
+    3. data_cls_remapped (flat) -> data_cls_clipped (cls flat): crop each object individually to class folders
     4. data_detect_remapped (flat) -> data_detect_stratified (split): stratified train/val/test
-    5. data_cls_clipped (flat) -> data_cls_stratified (split): stratified train/val/test
+    5. data_cls_clipped (cls flat) -> data_cls_stratified (split): stratified train/val/test by class
     6. data_detect_stratified (split) -> data_detect_augmented (split): augment
-    7. data_cls_stratified (split) -> data_cls_augmented (split): convert to cls format + augment
+    7. data_cls_stratified (split) -> data_cls_augmented (split): augment
     """
     buffer_ratio = DEFAULT_BUFFER_RATIO
     random_seed = DEFAULT_RANDOM_SEED
@@ -1436,12 +1577,12 @@ def run_full_dataset_pipeline() -> None:
     create_data_yaml(DATASET_CLS_REMAPPED_DIR)
 
     # Step 3: data_cls_remapped -> data_cls_clipped
-    # Crop each image tightly around all its objects
-    logger.info("STEP 3: data_cls_remapped -> data_cls_clipped (crop around objects)")
-    crop_flat_dataset(DATASET_CLS_REMAPPED_DIR, DATASET_CLS_CLIPPED_DIR, buffer_ratio)
-    shutil.copy2(
-        DATASET_CLS_REMAPPED_DIR / "data.yaml",
-        DATASET_CLS_CLIPPED_DIR / "data.yaml",
+    # Crop each object individually and write to class-named subfolders
+    logger.info(
+        "STEP 3: data_cls_remapped -> data_cls_clipped (per-object crop to cls folders)"
+    )
+    crop_flat_dataset_to_cls_format(
+        DATASET_CLS_REMAPPED_DIR, DATASET_CLS_CLIPPED_DIR, buffer_ratio=buffer_ratio
     )
 
     # Step 4: data_detect_remapped -> data_detect_stratified
@@ -1460,13 +1601,11 @@ def run_full_dataset_pipeline() -> None:
     )
 
     # Step 5: data_cls_clipped -> data_cls_stratified
-    logger.info("STEP 5: data_cls_clipped -> data_cls_stratified (stratified split)")
-    stratified_dataset_split(
-        DATASET_CLS_CLIPPED_DIR, DATASET_CLS_STRATIFIED_DIR, split_ratios, random_seed
+    logger.info(
+        "STEP 5: data_cls_clipped -> data_cls_stratified (stratified cls split)"
     )
-    shutil.copy2(
-        DATASET_CLS_CLIPPED_DIR / "data.yaml",
-        DATASET_CLS_STRATIFIED_DIR / "data.yaml",
+    stratified_cls_split(
+        DATASET_CLS_CLIPPED_DIR, DATASET_CLS_STRATIFIED_DIR, split_ratios, random_seed
     )
 
     # Step 6: data_detect_stratified -> data_detect_augmented
@@ -1480,19 +1619,10 @@ def run_full_dataset_pipeline() -> None:
     )
 
     # Step 7: data_cls_stratified -> data_cls_augmented
-    # augment_classification_dataset expects split/class/images folder structure,
-    # so convert from YOLO detection format first using a temp directory.
-    logger.info(
-        "STEP 7: data_cls_stratified -> data_cls_augmented (convert to cls format + augment)"
-    )
-    temp_cls_dir = DATASET_CLS_STRATIFIED_DIR.parent / "temp_cls_format"
-    if temp_cls_dir.exists():
-        shutil.rmtree(temp_cls_dir)
-    convert_detection_to_classification(DATASET_CLS_STRATIFIED_DIR, temp_cls_dir)
+    logger.info("STEP 7: data_cls_stratified -> data_cls_augmented (augment)")
     augment_classification_dataset(
-        temp_cls_dir, DATASET_CLS_AUGMENTED_DIR, augment_factor=4
+        DATASET_CLS_STRATIFIED_DIR, DATASET_CLS_AUGMENTED_DIR, augment_factor=4
     )
-    shutil.rmtree(temp_cls_dir)
 
     logger.info("DATASET PIPELINE COMPLETED SUCCESSFULLY!")
     logger.info("Generated datasets:")

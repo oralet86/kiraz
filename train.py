@@ -14,6 +14,7 @@ import os
 import pandas as pd
 from hyperparams import get_hyperparams, HPO_DATABASE
 from log import logger, add_log_file
+from metrics import cls_precision_recall_f1, detect_metrics
 from paths import (
     RESULTS_DIR,
     RESULTS_CSV,
@@ -21,8 +22,9 @@ from paths import (
     DATASET_DETECT_AUGMENTED_DIR,
     MODELS_DIR,
 )
-# from paths import DATASET_COMBINED_DIR as DATASET_AUGMENTED_DETECT_DIR
-# from paths import DATASET_CLS_DIR as DATASET_AUGMENTED_CLS_DIR
+
+# from paths import DATASET_DETECT_STRATIFIED_DIR as DATASET_DETECT_AUGMENTED_DIR
+# from paths import DATASET_CLS_STRATIFIED_DIR as DATASET_CLS_AUGMENTED_DIR
 
 parser = argparse.ArgumentParser(
     description="Train a YOLO model (classification or detection)"
@@ -50,6 +52,12 @@ parser.add_argument(
     "--epoch",
     type=int,
     help="Override the number of training epochs (for testing purposes)",
+)
+parser.add_argument(
+    "--batch-mult",
+    type=float,
+    default=1.0,
+    help="Batch size multiplier (default: 1.0)",
 )
 
 args = parser.parse_args()
@@ -150,43 +158,14 @@ def ensure_data_yaml(dataset_dir: Path, yaml_path: Path) -> None:
     logger.info(f"Created data.yaml at: {augmented_yaml_path}")
 
 
-def _extract_metrics(results_obj: Any, mode: str) -> Dict[str, Any]:
-    """Extract metrics based on training mode."""
+def _extract_cls_metrics(results_obj: Any) -> Dict[str, Any]:
+    """Extract classification metrics from a val() result object."""
     metrics: Dict[str, Any] = {}
 
-    if mode == "cls":
-        # For classification, metrics are in .top1
-        v = getattr(results_obj, "top1", None)
-        if v is not None:
-            metrics["top1"] = float(v)
-    else:  # detect
-        # For detection, metrics are in .box
-        box = getattr(results_obj, "box", None)
-        if box is not None:
-            for k in ("map", "map50", "map75", "mp", "mr", "f1"):
-                v = getattr(box, k, None)
-                if v is None:
-                    continue
+    v = getattr(results_obj, "top1", None)
+    if v is not None:
+        metrics["top1"] = float(v)
 
-                # Handle scalar
-                if isinstance(v, (int, float, np.generic)):
-                    metrics[f"box_{k}"] = float(v)
-
-                # Handle numpy array / list / tuple (per-class values)
-                elif isinstance(v, (np.ndarray, list, tuple)):
-                    if len(v) > 0:
-                        metrics[f"box_{k}"] = float(np.mean(v))
-                        metrics[f"box_{k}_per_class"] = [float(x) for x in v]
-
-        rd = getattr(results_obj, "results_dict", None)
-        if isinstance(rd, dict):
-            for k, v in rd.items():
-                if isinstance(v, (int, float, np.generic)):
-                    metrics[k] = float(v)
-                elif isinstance(v, (np.ndarray, list, tuple)) and len(v) > 0:
-                    metrics[k] = float(np.mean(v))
-
-    # Speed metrics are common to both modes
     speed = getattr(results_obj, "speed", None)
     if isinstance(speed, dict):
         metrics["speed_preprocess_ms"] = float(speed.get("preprocess", 0))
@@ -200,69 +179,31 @@ def log_results_to_file(
     model_name: str, metrics: Dict[str, Any], train_time: float, mode: str
 ) -> None:
     """Append results to unified results.csv file using pandas."""
-    # Use val split inference speed as representative inference time
     inference_time = metrics.get("val_speed_inference_ms", 0.0)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    row_data: Dict[str, Any] = {}
+    row_data: Dict[str, Any] = {
+        "model_name": model_name,
+        "mode": mode,
+        "seed": args.seed,
+        "timestamp": timestamp,
+        "train_time": train_time,
+        "inference_time": inference_time,
+    }
 
-    # Basic info
-    row_data.update(
-        {
-            "model_name": model_name,
-            "mode": mode,
-            "seed": args.seed,
-            "timestamp": timestamp,
-            "train_time": train_time,
-            "inference_time": inference_time,
-        }
-    )
-
-    # Primary metrics (different for each mode)
-    if mode == "cls":
-        row_data.update(
-            {
-                "train_primary": metrics.get("train_top1", np.nan),
-                "val_primary": metrics.get("val_top1", np.nan),
-                "test_primary": metrics.get("test_top1", np.nan),
-            }
-        )
-    else:  # detect
-        row_data.update(
-            {
-                "train_primary": metrics.get("train_box_map50", np.nan),
-                "val_primary": metrics.get("val_box_map50", np.nan),
-                "test_primary": metrics.get("test_box_map50", np.nan),
-            }
-        )
-
-    # Classification metrics (only for classification mode)
-    cls_metrics = ["top1"]
+    # Classification metrics
+    cls_metrics = ["top1", "precision", "recall", "f1"]
     for split in ["train", "val", "test"]:
         for metric in cls_metrics:
             key = f"{split}_{metric}"
             row_data[key] = metrics.get(key, np.nan) if mode == "cls" else np.nan
 
-    # Detection metrics (only for detection mode)
-    det_metrics = [
-        "box_map",
-        "box_map50",
-        "box_map75",
-        "box_f1",
-        "box_mp",
-        "box_mr",
-    ]
+    # Detection metrics
+    det_metrics = ["map50", "map50_95", "mean_iou", "box_mp", "box_mr", "box_f1"]
     for split in ["train", "val", "test"]:
         for metric in det_metrics:
             key = f"{split}_{metric}"
             row_data[key] = metrics.get(key, np.nan) if mode == "detect" else np.nan
-
-    # Common metrics (precision, recall, f1)
-    common_metrics = ["precision", "recall", "f1"]
-    for split in ["train", "val", "test"]:
-        for metric in common_metrics:
-            key = f"{split}_{metric}"
-            row_data[key] = metrics.get(key, np.nan)
 
     # Speed metrics
     speed_metrics = [
@@ -336,6 +277,20 @@ def train_model(ts: str, mode: str) -> Tuple[Path, float]:
         hyperparams["epochs"] = args.epoch
         logger.info(f"Overriding epochs to {args.epoch} for testing")
 
+    # Apply batch size multiplier and ensure even integer
+    if "batch" in hyperparams:
+        original_batch = hyperparams["batch"]
+        scaled_batch = int(original_batch * args.batch_mult)
+        # Ensure even integer, roll down if odd
+        if scaled_batch % 2 != 0:
+            scaled_batch -= 1
+        # Ensure at least 2
+        scaled_batch = max(2, scaled_batch)
+        hyperparams["batch"] = scaled_batch
+        logger.info(
+            f"Batch size: {original_batch} * {args.batch_mult} → {scaled_batch}"
+        )
+
     # Determine parameter type for logging
     model_name_lower = MODEL_NAME.lower()
     if args.hpo and model_name_lower in HPO_DATABASE:
@@ -378,59 +333,127 @@ def train_model(ts: str, mode: str) -> Tuple[Path, float]:
     train_time = time.time() - start_time
     logger.info(f"Training complete. Best weights: {best_path}")
 
+    # Export model before cleanup
     best_model = YOLO(best_path)
     best_model.export(format="onnx", opset=20)
+
+    # Aggressive cleanup after export
+    logger.info("Starting aggressive cleanup after training and export...")
+
+    # Delete model references explicitly
+    del best_model
+    del model
+    del results
+
+    # Synchronize CUDA to ensure all operations complete
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+    # Multiple rounds of aggressive cleanup
+    for _ in range(3):
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    # Final synchronization and cache clear
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+        # Log final memory state
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        cached = torch.cuda.memory_reserved() / 1024**3
+        logger.info(
+            f"Post-training cleanup - Allocated: {allocated:.2f}GB, Cached: {cached:.2f}GB"
+        )
 
     return best_path, train_time
 
 
 def evaluate_on_splits(best_weights: Path, ts: str, mode: str) -> Dict[str, Any]:
-    """Evaluate model on train, val, and test splits using batch evaluation."""
+    """Evaluate model on train, val, and test splits."""
     model = YOLO(best_weights)
-    all_metrics = {}
+    all_metrics: Dict[str, Any] = {}
 
-    # Use augmented dataset based on mode
     dataset_dir = (
         DATASET_CLS_AUGMENTED_DIR if mode == "cls" else DATASET_DETECT_AUGMENTED_DIR
     )
-    data_yaml = dataset_dir / "data.yaml" if mode == "detect" else None
-
-    # Evaluation data parameter differs by mode
-    eval_data = str(dataset_dir.resolve()) if mode == "cls" else str(data_yaml)
-
     hyperparams = get_hyperparams(MODEL_NAME, hpo=args.hpo)
+    if "batch" in hyperparams:
+        original_batch = hyperparams["batch"]
+        scaled_batch = int(original_batch * args.batch_mult)
+        # Ensure even integer, roll down if odd
+        if scaled_batch % 2 != 0:
+            scaled_batch -= 1
+        # Ensure at least 2
+        eval_batch = max(2, scaled_batch)
 
-    # Evaluate on all splits
     for split in ["train", "val", "test"]:
         logger.info(f"Evaluating on {split} split...")
 
-        # Clear GPU memory before evaluation
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            gc.collect()
+        if mode == "cls":
+            split_results = model.val(
+                data=str(dataset_dir.resolve()),
+                split=split,
+                device=DEVICE,
+                project=str(RESULTS_DIR),
+                name=f"{ts}-{split}",
+                exist_ok=True,
+                batch=eval_batch,
+            )
+            split_metrics = _extract_cls_metrics(split_results)
+            prf = cls_precision_recall_f1(split_results)
+            split_metrics.update(prf)
+        else:
+            data_yaml = str((dataset_dir / "data.yaml").resolve())
+            split_metrics = detect_metrics(
+                model=model,
+                data=data_yaml,
+                split=split,
+                device=DEVICE,
+                batch=eval_batch,
+            )
 
-        split_results = model.val(
-            data=eval_data,
-            split=split,
-            device=DEVICE,
-            project=str(RESULTS_DIR),
-            name=f"{ts}-{split}",
-            exist_ok=True,
-            batch=(hyperparams.get("batch", 16)) * 2,
-        )
-
-        # Extract metrics and add split prefix
-        split_metrics = _extract_metrics(split_results, mode)
         for key, value in split_metrics.items():
             all_metrics[f"{split}_{key}"] = value
 
-        # For detection, map YOLO's metrics to common names
-        if mode == "detect":
-            all_metrics[f"{split}_precision"] = split_metrics.get("box_mp", 0.0)
-            all_metrics[f"{split}_recall"] = split_metrics.get("box_mr", 0.0)
-            all_metrics[f"{split}_f1"] = split_metrics.get("box_f1", 0.0)
+    # Cleanup model after all evaluations
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
     return all_metrics
+
+
+def cleanup_cuda() -> None:
+    """Clean up CUDA memory with optional aggressive cleanup.
+
+    Args:
+        aggressive: If True, performs more thorough cleanup including
+                   forcing garbage collection across all generations and
+                   resetting peak memory stats.
+    """
+    if torch.cuda.is_available():
+        # Force garbage collection across all generations
+        for _ in range(2):
+            gc.collect()
+
+        # Clear CUDA cache
+        torch.cuda.empty_cache()
+
+        # Additional aggressive cleanup
+        torch.cuda.synchronize()  # Ensure all operations complete
+        torch.cuda.empty_cache()  # Clear again after sync
+
+        # Reset peak memory stats to free up tracking overhead
+        torch.cuda.reset_peak_memory_stats()
+
+        # Force cleanup of any remaining tensors
+        for _ in range(2):
+            torch.cuda.empty_cache()
+            gc.collect()
 
 
 def main() -> None:
@@ -450,10 +473,15 @@ def main() -> None:
         args.seed,
     )
 
+    cleanup_cuda()
+
     # Train model
     best_weights, train_time = train_model(ts, args.mode)
 
+    cleanup_cuda()
+
     # Evaluate on all splits
+    cleanup_cuda()  # Cleanup before evaluation
     all_metrics = evaluate_on_splits(best_weights, ts, args.mode)
 
     # Log results
@@ -464,6 +492,10 @@ def main() -> None:
     logger.info(f"Train Time: {train_time:.2f}s")
 
     logger.info("Training completed in %.2f seconds", train_time)
+
+    # Final cleanup before exit
+    cleanup_cuda()
+    logger.info("Final cleanup completed")
 
 
 if __name__ == "__main__":

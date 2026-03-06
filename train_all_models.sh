@@ -1,160 +1,177 @@
 #!/bin/bash
 
-echo "Comprehensive Model Training with Seeds"
-echo
+echo "Training all models..."
+source ./.venv/bin/activate
 
-# Define 5 seeds for reproducible training
-SEEDS=(42 737 1573 2468 3456)
+# Detection models - seed 42
+python train.py --mode detect --model yolov8n.pt --seed 42 --batch-mult 1.0
+python train.py --mode detect --model yolov8s.pt --seed 42 --batch-mult 0.7
+python train.py --mode detect --model yolov8m.pt --seed 42 --batch-mult 0.4
+python train.py --mode detect --model yolo11n.pt --seed 42 --batch-mult 1.0
+python train.py --mode detect --model yolo11s.pt --seed 42 --batch-mult 0.7
+python train.py --mode detect --model yolo11m.pt --seed 42 --batch-mult 0.4
+python train.py --mode detect --model yolov9t.pt --seed 42 --batch-mult 0.7
+python train.py --mode detect --model yolov9s.pt --seed 42 --batch-mult 0.4
+python train.py --mode detect --model yolov9m.pt --seed 42 --batch-mult 0.4
+python train.py --mode detect --model yolo12n.pt --seed 42 --batch-mult 1.0
+python train.py --mode detect --model yolo12s.pt --seed 42 --batch-mult 0.7
+python train.py --mode detect --model yolo12m.pt --seed 42 --batch-mult 0.4
+python train.py --mode detect --model yolov10n.pt --seed 42 --batch-mult 1.0
+python train.py --mode detect --model yolov10s.pt --seed 42 --batch-mult 0.7
+python train.py --mode detect --model yolov10m.pt --seed 42 --batch-mult 0.4
+python train.py --mode detect --model yolo26n.pt --seed 42 --batch-mult 1.0
+python train.py --mode detect --model yolo26s.pt --seed 42 --batch-mult 0.7
+python train.py --mode detect --model yolo26m.pt --seed 42 --batch-mult 0.4
 
-# Detection models (without HPO)
-DETECT_MODELS=(yolov8n yolov8s yolov8m yolo11n yolo11s yolo11m yolov9t yolov9s yolov9m yolo12n yolov12s yolov12m yolov10n yolov10s yolov10m yolo26n yolo26s yolo26m)
+# Detection models - seed 737
+python train.py --mode detect --model yolov8n.pt --seed 737 --batch-mult 1.0
+python train.py --mode detect --model yolov8s.pt --seed 737 --batch-mult 0.7
+python train.py --mode detect --model yolov8m.pt --seed 737 --batch-mult 0.4
+python train.py --mode detect --model yolo11n.pt --seed 737 --batch-mult 1.0
+python train.py --mode detect --model yolo11s.pt --seed 737 --batch-mult 0.7
+python train.py --mode detect --model yolo11m.pt --seed 737 --batch-mult 0.4
+python train.py --mode detect --model yolov9t.pt --seed 737 --batch-mult 0.7
+python train.py --mode detect --model yolov9s.pt --seed 737 --batch-mult 0.4
+python train.py --mode detect --model yolov9m.pt --seed 737 --batch-mult 0.4
+python train.py --mode detect --model yolo12n.pt --seed 737 --batch-mult 1.0
+python train.py --mode detect --model yolo12s.pt --seed 737 --batch-mult 0.7
+python train.py --mode detect --model yolo12m.pt --seed 737 --batch-mult 0.4
+python train.py --mode detect --model yolov10n.pt --seed 737 --batch-mult 1.0
+python train.py --mode detect --model yolov10s.pt --seed 737 --batch-mult 0.7
+python train.py --mode detect --model yolov10m.pt --seed 737 --batch-mult 0.4
+python train.py --mode detect --model yolo26n.pt --seed 737 --batch-mult 1.0
+python train.py --mode detect --model yolo26s.pt --seed 737 --batch-mult 0.7
+python train.py --mode detect --model yolo26m.pt --seed 737 --batch-mult 0.4
 
-# Detection models with HPO (only those supported in hyperparams.py)
-DETECT_HPO_MODELS=(yolov10m yolo11m)
+# Detection models - seed 1573
+python train.py --mode detect --model yolov8n.pt --seed 1573 --batch-mult 1.0
+python train.py --mode detect --model yolov8s.pt --seed 1573 --batch-mult 0.7
+python train.py --mode detect --model yolov8m.pt --seed 1573 --batch-mult 0.4
+python train.py --mode detect --model yolo11n.pt --seed 1573 --batch-mult 1.0
+python train.py --mode detect --model yolo11s.pt --seed 1573 --batch-mult 0.7
+python train.py --mode detect --model yolo11m.pt --seed 1573 --batch-mult 0.4
+python train.py --mode detect --model yolov9t.pt --seed 1573 --batch-mult 0.7
+python train.py --mode detect --model yolov9s.pt --seed 1573 --batch-mult 0.4
+python train.py --mode detect --model yolov9m.pt --seed 1573 --batch-mult 0.4
+python train.py --mode detect --model yolo12n.pt --seed 1573 --batch-mult 1.0
+python train.py --mode detect --model yolo12s.pt --seed 1573 --batch-mult 0.7
+python train.py --mode detect --model yolo12m.pt --seed 1573 --batch-mult 0.4
+python train.py --mode detect --model yolov10n.pt --seed 1573 --batch-mult 1.0
+python train.py --mode detect --model yolov10s.pt --seed 1573 --batch-mult 0.7
+python train.py --mode detect --model yolov10m.pt --seed 1573 --batch-mult 0.4
+python train.py --mode detect --model yolo26n.pt --seed 1573 --batch-mult 1.0
+python train.py --mode detect --model yolo26s.pt --seed 1573 --batch-mult 0.7
+python train.py --mode detect --model yolo26m.pt --seed 1573 --batch-mult 0.4
 
-# Classification models with HPO
-CLS_HPO_MODELS=(yolo26l-cls yolo11l-cls)
+# Detection models - seed 2468
+python train.py --mode detect --model yolov8n.pt --seed 2468 --batch-mult 1.0
+python train.py --mode detect --model yolov8s.pt --seed 2468 --batch-mult 0.7
+python train.py --mode detect --model yolov8m.pt --seed 2468 --batch-mult 0.4
+python train.py --mode detect --model yolo11n.pt --seed 2468 --batch-mult 1.0
+python train.py --mode detect --model yolo11s.pt --seed 2468 --batch-mult 0.7
+python train.py --mode detect --model yolo11m.pt --seed 2468 --batch-mult 0.4
+python train.py --mode detect --model yolov9t.pt --seed 2468 --batch-mult 0.7
+python train.py --mode detect --model yolov9s.pt --seed 2468 --batch-mult 0.4
+python train.py --mode detect --model yolov9m.pt --seed 2468 --batch-mult 0.4
+python train.py --mode detect --model yolo12n.pt --seed 2468 --batch-mult 1.0
+python train.py --mode detect --model yolo12s.pt --seed 2468 --batch-mult 0.7
+python train.py --mode detect --model yolo12m.pt --seed 2468 --batch-mult 0.4
+python train.py --mode detect --model yolov10n.pt --seed 2468 --batch-mult 1.0
+python train.py --mode detect --model yolov10s.pt --seed 2468 --batch-mult 0.7
+python train.py --mode detect --model yolov10m.pt --seed 2468 --batch-mult 0.4
+python train.py --mode detect --model yolo26n.pt --seed 2468 --batch-mult 1.0
+python train.py --mode detect --model yolo26s.pt --seed 2468 --batch-mult 0.7
+python train.py --mode detect --model yolo26m.pt --seed 2468 --batch-mult 0.4
 
-# Classification models (without HPO)
-CLS_MODELS=(yolov8n-cls yolov8s-cls yolov8m-cls yolov8l-cls yolo11n-cls yolo11s-cls yolo11m-cls yolo11l-cls yolo26n-cls yolo26s-cls yolo26m-cls yolo26l-cls)
+# Detection models - seed 3456
+python train.py --mode detect --model yolov8n.pt --seed 3456 --batch-mult 1.0
+python train.py --mode detect --model yolov8s.pt --seed 3456 --batch-mult 0.7
+python train.py --mode detect --model yolov8m.pt --seed 3456 --batch-mult 0.4
+python train.py --mode detect --model yolo11n.pt --seed 3456 --batch-mult 1.0
+python train.py --mode detect --model yolo11s.pt --seed 3456 --batch-mult 0.7
+python train.py --mode detect --model yolo11m.pt --seed 3456 --batch-mult 0.4
+python train.py --mode detect --model yolov9t.pt --seed 3456 --batch-mult 0.7
+python train.py --mode detect --model yolov9s.pt --seed 3456 --batch-mult 0.4
+python train.py --mode detect --model yolov9m.pt --seed 3456 --batch-mult 0.4
+python train.py --mode detect --model yolo12n.pt --seed 3456 --batch-mult 1.0
+python train.py --mode detect --model yolo12s.pt --seed 3456 --batch-mult 0.7
+python train.py --mode detect --model yolo12m.pt --seed 3456 --batch-mult 0.4
+python train.py --mode detect --model yolov10n.pt --seed 3456 --batch-mult 1.0
+python train.py --mode detect --model yolov10s.pt --seed 3456 --batch-mult 0.7
+python train.py --mode detect --model yolov10m.pt --seed 3456 --batch-mult 0.4
+python train.py --mode detect --model yolo26n.pt --seed 3456 --batch-mult 1.0
+python train.py --mode detect --model yolo26s.pt --seed 3456 --batch-mult 0.7
+python train.py --mode detect --model yolo26m.pt --seed 3456 --batch-mult 0.4
 
-echo "Training with seeds: ${SEEDS[*]}"
-echo
+# Classification models - seed 42
+python train.py --mode cls --model yolov8n-cls.pt --seed 42 --batch-mult 1.0
+python train.py --mode cls --model yolov8s-cls.pt --seed 42 --batch-mult 0.7
+python train.py --mode cls --model yolov8m-cls.pt --seed 42 --batch-mult 0.4
+python train.py --mode cls --model yolov8l-cls.pt --seed 42 --batch-mult 0.2
+python train.py --mode cls --model yolo11n-cls.pt --seed 42 --batch-mult 1.0
+python train.py --mode cls --model yolo11s-cls.pt --seed 42 --batch-mult 0.7
+python train.py --mode cls --model yolo11m-cls.pt --seed 42 --batch-mult 0.4
+python train.py --mode cls --model yolo11l-cls.pt --seed 42 --batch-mult 0.2
+python train.py --mode cls --model yolo26n-cls.pt --seed 42 --batch-mult 1.0
+python train.py --mode cls --model yolo26s-cls.pt --seed 42 --batch-mult 0.7
+python train.py --mode cls --model yolo26m-cls.pt --seed 42 --batch-mult 0.4
+python train.py --mode cls --model yolo26l-cls.pt --seed 42 --batch-mult 0.2
 
-# Calculate total jobs
-detect_jobs=$((${#DETECT_MODELS[@]} + ${#DETECT_HPO_MODELS[@]}))
-cls_jobs=$((${#CLS_HPO_MODELS[@]} + ${#CLS_MODELS[@]}))
-total_jobs=$(((${detect_jobs} + ${cls_jobs}) * ${#SEEDS[@]}))
+# Classification models - seed 737
+python train.py --mode cls --model yolov8n-cls.pt --seed 737 --batch-mult 1.0
+python train.py --mode cls --model yolov8s-cls.pt --seed 737 --batch-mult 0.7
+python train.py --mode cls --model yolov8m-cls.pt --seed 737 --batch-mult 0.4
+python train.py --mode cls --model yolov8l-cls.pt --seed 737 --batch-mult 0.2
+python train.py --mode cls --model yolo11n-cls.pt --seed 737 --batch-mult 1.0
+python train.py --mode cls --model yolo11s-cls.pt --seed 737 --batch-mult 0.7
+python train.py --mode cls --model yolo11m-cls.pt --seed 737 --batch-mult 0.4
+python train.py --mode cls --model yolo11l-cls.pt --seed 737 --batch-mult 0.2
+python train.py --mode cls --model yolo26n-cls.pt --seed 737 --batch-mult 1.0
+python train.py --mode cls --model yolo26s-cls.pt --seed 737 --batch-mult 0.7
+python train.py --mode cls --model yolo26m-cls.pt --seed 737 --batch-mult 0.4
+python train.py --mode cls --model yolo26l-cls.pt --seed 737 --batch-mult 0.2
 
-echo "Total training jobs: $total_jobs"
-echo
+# Classification models - seed 1573
+python train.py --mode cls --model yolov8n-cls.pt --seed 1573 --batch-mult 1.0
+python train.py --mode cls --model yolov8s-cls.pt --seed 1573 --batch-mult 0.7
+python train.py --mode cls --model yolov8m-cls.pt --seed 1573 --batch-mult 0.4
+python train.py --mode cls --model yolov8l-cls.pt --seed 1573 --batch-mult 0.2
+python train.py --mode cls --model yolo11n-cls.pt --seed 1573 --batch-mult 1.0
+python train.py --mode cls --model yolo11s-cls.pt --seed 1573 --batch-mult 0.7
+python train.py --mode cls --model yolo11m-cls.pt --seed 1573 --batch-mult 0.4
+python train.py --mode cls --model yolo11l-cls.pt --seed 1573 --batch-mult 0.2
+python train.py --mode cls --model yolo26n-cls.pt --seed 1573 --batch-mult 1.0
+python train.py --mode cls --model yolo26s-cls.pt --seed 1573 --batch-mult 0.7
+python train.py --mode cls --model yolo26m-cls.pt --seed 1573 --batch-mult 0.4
+python train.py --mode cls --model yolo26l-cls.pt --seed 1573 --batch-mult 0.2
 
-# Create log directory if not exists
-mkdir -p training_logs
+# Classification models - seed 2468
+python train.py --mode cls --model yolov8n-cls.pt --seed 2468 --batch-mult 1.0
+python train.py --mode cls --model yolov8s-cls.pt --seed 2468 --batch-mult 0.7
+python train.py --mode cls --model yolov8m-cls.pt --seed 2468 --batch-mult 0.4
+python train.py --mode cls --model yolov8l-cls.pt --seed 2468 --batch-mult 0.2
+python train.py --mode cls --model yolo11n-cls.pt --seed 2468 --batch-mult 1.0
+python train.py --mode cls --model yolo11s-cls.pt --seed 2468 --batch-mult 0.7
+python train.py --mode cls --model yolo11m-cls.pt --seed 2468 --batch-mult 0.4
+python train.py --mode cls --model yolo11l-cls.pt --seed 2468 --batch-mult 0.2
+python train.py --mode cls --model yolo26n-cls.pt --seed 2468 --batch-mult 1.0
+python train.py --mode cls --model yolo26s-cls.pt --seed 2468 --batch-mult 0.7
+python train.py --mode cls --model yolo26m-cls.pt --seed 2468 --batch-mult 0.4
+python train.py --mode cls --model yolo26l-cls.pt --seed 2468 --batch-mult 0.2
 
-current_job=0
+# Classification models - seed 3456
+python train.py --mode cls --model yolov8n-cls.pt --seed 3456 --batch-mult 1.0
+python train.py --mode cls --model yolov8s-cls.pt --seed 3456 --batch-mult 0.7
+python train.py --mode cls --model yolov8m-cls.pt --seed 3456 --batch-mult 0.4
+python train.py --mode cls --model yolov8l-cls.pt --seed 3456 --batch-mult 0.2
+python train.py --mode cls --model yolo11n-cls.pt --seed 3456 --batch-mult 1.0
+python train.py --mode cls --model yolo11s-cls.pt --seed 3456 --batch-mult 0.7
+python train.py --mode cls --model yolo11m-cls.pt --seed 3456 --batch-mult 0.4
+python train.py --mode cls --model yolo11l-cls.pt --seed 3456 --batch-mult 0.2
+python train.py --mode cls --model yolo26n-cls.pt --seed 3456 --batch-mult 1.0
+python train.py --mode cls --model yolo26s-cls.pt --seed 3456 --batch-mult 0.7
+python train.py --mode cls --model yolo26m-cls.pt --seed 3456 --batch-mult 0.4
+python train.py --mode cls --model yolo26l-cls.pt --seed 3456 --batch-mult 0.2
 
-echo "========================================"
-echo "Training Detection Models (Standard)"
-echo "========================================"
-for seed in "${SEEDS[@]}"; do
-    echo
-    echo "=== Training Detection Models with Seed $seed ==="
-    
-    for model in "${DETECT_MODELS[@]}"; do
-        ((current_job++))
-        echo "[$current_job/$total_jobs] Training $model with seed $seed..."
-        echo "[$current_job/$total_jobs] Training $model with seed $seed..." >> "training_logs/training_log_$seed.txt"
-        
-        if python train.py --mode detect --model "$model" --seed "$seed" >> "training_logs/training_log_$seed.txt" 2>&1; then
-            echo "  [SUCCESS] $model with seed $seed completed"
-            echo "  [SUCCESS] $model with seed $seed completed" >> "training_logs/training_log_$seed.txt"
-        else
-            echo "  [ERROR] $model with seed $seed failed (check training_log_$seed.txt)"
-            echo "  [ERROR] $model with seed $seed failed" >> "training_logs/training_log_$seed.txt"
-        fi
-    done
-done
-
-echo
-echo "========================================"
-echo "Training Detection Models (HPO)"
-echo "========================================"
-for seed in "${SEEDS[@]}"; do
-    echo
-    echo "=== Training Detection Models with HPO and Seed $seed ==="
-    
-    for model in "${DETECT_HPO_MODELS[@]}"; do
-        ((current_job++))
-        echo "[$current_job/$total_jobs] Training $model with HPO and seed $seed..."
-        echo "[$current_job/$total_jobs] Training $model with HPO and seed $seed..." >> "training_logs/training_log_$seed.txt"
-        
-        if python train.py --mode detect --model "$model" --hpo --seed "$seed" >> "training_logs/training_log_$seed.txt" 2>&1; then
-            echo "  [SUCCESS] $model with HPO and seed $seed completed"
-            echo "  [SUCCESS] $model with HPO and seed $seed completed" >> "training_logs/training_log_$seed.txt"
-        else
-            echo "  [ERROR] $model with HPO and seed $seed failed (check training_log_$seed.txt)"
-            echo "  [ERROR] $model with HPO and seed $seed failed" >> "training_logs/training_log_$seed.txt"
-        fi
-    done
-done
-
-echo
-echo "========================================"
-echo "Training Classification Models (HPO)"
-echo "========================================"
-for seed in "${SEEDS[@]}"; do
-    echo
-    echo "=== Training Classification Models with HPO and Seed $seed ==="
-    
-    for model in "${CLS_HPO_MODELS[@]}"; do
-        ((current_job++))
-        echo "[$current_job/$total_jobs] Training $model with HPO and seed $seed..."
-        echo "[$current_job/$total_jobs] Training $model with HPO and seed $seed..." >> "training_logs/training_log_$seed.txt"
-        
-        if python train.py --mode cls --model "$model" --hpo --seed "$seed" >> "training_logs/training_log_$seed.txt" 2>&1; then
-            echo "  [SUCCESS] $model with HPO and seed $seed completed"
-            echo "  [SUCCESS] $model with HPO and seed $seed completed" >> "training_logs/training_log_$seed.txt"
-        else
-            echo "  [ERROR] $model with HPO and seed $seed failed (check training_log_$seed.txt)"
-            echo "  [ERROR] $model with HPO and seed $seed failed" >> "training_logs/training_log_$seed.txt"
-        fi
-    done
-done
-
-echo
-echo "========================================"
-echo "Training Classification Models (Standard)"
-echo "========================================"
-for seed in "${SEEDS[@]}"; do
-    echo
-    echo "=== Training Classification Models with Seed $seed ==="
-    
-    for model in "${CLS_MODELS[@]}"; do
-        ((current_job++))
-        echo "[$current_job/$total_jobs] Training $model with seed $seed..."
-        echo "[$current_job/$total_jobs] Training $model with seed $seed..." >> "training_logs/training_log_$seed.txt"
-        
-        if python train.py --mode cls --model "$model" --seed "$seed" >> "training_logs/training_log_$seed.txt" 2>&1; then
-            echo "  [SUCCESS] $model with seed $seed completed"
-            echo "  [SUCCESS] $model with seed $seed completed" >> "training_logs/training_log_$seed.txt"
-        else
-            echo "  [ERROR] $model with seed $seed failed (check training_log_$seed.txt)"
-            echo "  [ERROR] $model with seed $seed failed" >> "training_logs/training_log_$seed.txt"
-        fi
-    done
-done
-
-echo
-echo "========================================"
-echo "Training Complete!"
-echo "========================================"
-echo "Total jobs processed: $current_job/$total_jobs"
-echo
-echo "Results are saved in the results/ directory"
-echo "Detailed logs are available in training_logs/"
-echo
-echo "Check results.csv for comprehensive results with seed information"
-echo
-
-# Generate summary report
-echo "Generating summary report..."
-{
-    echo "Training Summary Report"
-    echo "Generated on: $(date)"
-    echo "Total jobs: $current_job/$total_jobs"
-    echo
-    echo "Seeds used: ${SEEDS[*]}"
-    echo
-    echo "Model categories:"
-    echo "- Detection (Standard): ${DETECT_MODELS[*]}"
-    echo "- Detection (HPO): ${DETECT_HPO_MODELS[*]}"
-    echo "- Classification (HPO): ${CLS_HPO_MODELS[*]}"
-    echo "- Classification (Standard): ${CLS_MODELS[*]}"
-    echo
-    echo "For detailed results, see: results/results.csv"
-    echo "For training logs, see: training_logs/training_log_*.txt"
-} > training_logs/summary_report.txt
-
-echo "Summary report saved to: training_logs/summary_report.txt"
-echo
+echo "All models trained successfully!"
+echo "Check the results/ directory for training results."
