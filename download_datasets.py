@@ -71,8 +71,24 @@ def download_and_extract():
             file_list = zip_ref.namelist()
             print(f"Archive contains {len(file_list)} files")
 
+            # Check if there's a single top-level directory
+            top_dirs = set()
+            for path in file_list:
+                if "/" in path:
+                    top_dir = path.split("/")[0]
+                    if not top_dir.startswith("."):
+                        top_dirs.add(top_dir)
+
             # Extract all
             zip_ref.extractall(".")
+
+            # If there's a single top-level directory that's not "datasets", rename it
+            if len(top_dirs) == 1:
+                old_name = list(top_dirs)[0]
+                if old_name != "datasets":
+                    if Path(old_name).exists():
+                        print(f"Renaming '{old_name}' to 'datasets'")
+                        Path(old_name).rename("datasets")
 
         print("Extraction successful")
 
