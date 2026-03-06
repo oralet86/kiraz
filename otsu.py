@@ -2,8 +2,12 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from pathlib import Path
 
-IMAGE_PATH = "data/images/275_jpg.rf.ea21c909d7b3158aa6ee9ec3e45c55d6.jpg"
+# Use a configurable path - can be overridden when needed
+IMAGE_PATH = Path(
+    "datasets/original/images/275_jpg.rf.ea21c909d7b3158aa6ee9ec3e45c55d6.jpg"
+)
 
 
 def main():

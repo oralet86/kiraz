@@ -17,8 +17,8 @@ from log import logger, add_log_file
 from paths import (
     RESULTS_DIR,
     RESULTS_CSV,
-    DATASET_AUGMENTED_CLS_DIR,
-    DATASET_AUGMENTED_DETECT_DIR,
+    DATASET_CLS_AUGMENTED_DIR,
+    DATASET_DETECT_AUGMENTED_DIR,
     MODELS_DIR,
 )
 # from paths import DATASET_COMBINED_DIR as DATASET_AUGMENTED_DETECT_DIR
@@ -301,7 +301,7 @@ def train_model(ts: str, mode: str) -> Tuple[Path, float]:
     """Train model based on mode."""
     # Use augmented dataset based on mode
     dataset_dir = (
-        DATASET_AUGMENTED_CLS_DIR if mode == "cls" else DATASET_AUGMENTED_DETECT_DIR
+        DATASET_CLS_AUGMENTED_DIR if mode == "cls" else DATASET_DETECT_AUGMENTED_DIR
     )
     data_yaml = dataset_dir / "data.yaml" if mode == "detect" else None
 
@@ -391,7 +391,7 @@ def evaluate_on_splits(best_weights: Path, ts: str, mode: str) -> Dict[str, Any]
 
     # Use augmented dataset based on mode
     dataset_dir = (
-        DATASET_AUGMENTED_CLS_DIR if mode == "cls" else DATASET_AUGMENTED_DETECT_DIR
+        DATASET_CLS_AUGMENTED_DIR if mode == "cls" else DATASET_DETECT_AUGMENTED_DIR
     )
     data_yaml = dataset_dir / "data.yaml" if mode == "detect" else None
 

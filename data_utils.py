@@ -10,8 +10,6 @@ This module provides comprehensive utilities for:
 6. Dataset statistics and class distribution analysis
 7. Dataset merging and stratified splitting
 8. YAML configuration support
-
-Author: Generated from multiple utility scripts
 """
 
 from __future__ import annotations
@@ -19,23 +17,25 @@ from pathlib import Path
 import cv2
 import numpy as np
 import shutil
-import logging
 import yaml
 import random
-import os
 from collections import Counter, defaultdict
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Set
+from log import logger
+from data_augmentation import augment_detection_dataset, augment_classification_dataset
 from paths import (
-    DATASET_SPLIT_DIR,
-    DATASET_COMBINED_DIR,
-    DATASET_CLIPPED_SPLIT_DIR,
-    DATASET_CLS_ALT_DIR,
+    DATASET_ORIGINAL_DIR,
+    DATASET_DETECT_REMAPPED_DIR,
+    DATASET_CLS_REMAPPED_DIR,
+    DATASET_CLS_CLIPPED_DIR,
+    DATASET_DETECT_STRATIFIED_DIR,
+    DATASET_CLS_STRATIFIED_DIR,
+    DATASET_DETECT_AUGMENTED_DIR,
+    DATASET_CLS_AUGMENTED_DIR,
+    DATASET_SPLITS,
 )
 
 # GLOBAL CONFIGURATION
-
-# Standard dataset splits
-DATASET_SPLITS = ["train", "val", "test"]
 
 # Supported image extensions
 IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"]
@@ -54,9 +54,9 @@ CLASSIFICATION_MAPPING = {
     1: "cherry-imperfect",
 }  # For classification conversion
 
-# Logging configuration
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-logger = logging.getLogger(__name__)
+# New pipeline-specific mappings
+DETECTION_REMAPPED_MAPPING = {0: 0, 1: 0, 2: 1}  # cherry/cherry-imperfect->0, stem->1
+CLS_REMAPPED_MAPPING = {0: 0, 1: 1}  # cherry->0, cherry-imperfect->1 (remove stem)
 
 
 # RESOLUTION ANALYSIS UTILITIES
@@ -152,12 +152,12 @@ def print_resolution_statistics(name: str, values: List[int]) -> None:
         return
 
     values_array = np.array(values)
-    print(f"\n{name}:")
-    print(f"  min:    {values_array.min():.1f}")
-    print(f"  max:    {values_array.max():.1f}")
-    print(f"  mean:   {values_array.mean():.1f}")
-    print(f"  median: {np.median(values_array):.1f}")
-    print(f"  std:    {values_array.std():.1f}")
+    logger.info(f"{name}:")
+    logger.info(f"  min:    {values_array.min():.1f}")
+    logger.info(f"  max:    {values_array.max():.1f}")
+    logger.info(f"  mean:   {values_array.mean():.1f}")
+    logger.info(f"  median: {np.median(values_array):.1f}")
+    logger.info(f"  std:    {values_array.std():.1f}")
 
 
 def print_resolution_buckets(short_sides: List[int]) -> None:
@@ -169,9 +169,9 @@ def print_resolution_buckets(short_sides: List[int]) -> None:
     """
     buckets = {
         "<512": 0,
-        "512–639": 0,
-        "640–767": 0,
-        "768–1023": 0,
+        "512\u2013639": 0,
+        "640\u2013767": 0,
+        "768\u20131023": 0,
         "1024+": 0,
     }
 
@@ -179,19 +179,19 @@ def print_resolution_buckets(short_sides: List[int]) -> None:
         if side < 512:
             buckets["<512"] += 1
         elif side < 640:
-            buckets["512–639"] += 1
+            buckets["512\u2013639"] += 1
         elif side < 768:
-            buckets["640–767"] += 1
+            buckets["640\u2013767"] += 1
         elif side < 1024:
-            buckets["768–1023"] += 1
+            buckets["768\u20131023"] += 1
         else:
             buckets["1024+"] += 1
 
-    print("Short-side distribution:")
+    logger.info("Short-side distribution:")
     total = len(short_sides)
     for bucket, count in buckets.items():
         percentage = count / total * 100 if total > 0 else 0
-        print(f"  {bucket:10s}: {count:4d} ({percentage:4.1f}%)")
+        logger.info(f"  {bucket:10s}: {count:4d} ({percentage:4.1f}%)")
 
 
 def analyze_dataset_resolution(
@@ -227,9 +227,9 @@ def analyze_dataset_resolution(
     print_resolution_buckets(short_sides)
 
     # Top resolutions
-    print("\nTop 10 most common exact resolutions:")
+    logger.info("Top 10 most common exact resolutions:")
     for (w, h), count in exact_resolutions.most_common(10):
-        print(f"  {w}x{h}: {count}")
+        logger.info(f"  {w}x{h}: {count}")
 
 
 # DATASET STATISTICS AND ANALYSIS UTILITIES
@@ -303,7 +303,7 @@ def get_image_files(images_dir: Path) -> List[Path]:
     """
     images = []
     for ext in IMAGE_EXTENSIONS:
-        images.extend(images_dir.glob(ext))
+        images.extend(images_dir.glob(f"*{ext}"))
     return images
 
 
@@ -323,9 +323,9 @@ def dataset_statistics(dataset_dir: Path, splits: Optional[List[str]] = None) ->
     overall_images = 0
     overall_objects = 0
 
-    print("\n" + "=" * 50)
-    print("DATASET STATISTICS")
-    print("=" * 50)
+    logger.info("=" * 50)
+    logger.info("DATASET STATISTICS")
+    logger.info("=" * 50)
 
     for split in splits:
         split_path = dataset_dir / split
@@ -352,9 +352,9 @@ def dataset_statistics(dataset_dir: Path, splits: Optional[List[str]] = None) ->
 
         overall_images += len(images)
 
-        print(f"\n[{split.upper()}]")
-        print(f"  Images: {len(images)}")
-        print(f"  Objects: {total_objects}")
+        logger.info(f"[{split.upper()}]")
+        logger.info(f"  Images: {len(images)}")
+        logger.info(f"  Objects: {total_objects}")
 
         for class_id in sorted(class_counts):
             name = (
@@ -362,13 +362,13 @@ def dataset_statistics(dataset_dir: Path, splits: Optional[List[str]] = None) ->
                 if class_names and class_id < len(class_names)
                 else f"class_{class_id}"
             )
-            print(f"    {name} ({class_id}): {class_counts[class_id]}")
+            logger.info(f"    {name} ({class_id}): {class_counts[class_id]}")
 
-    print("\n" + "=" * 30)
-    print("OVERALL TOTALS")
-    print("=" * 30)
-    print(f"Total images: {overall_images}")
-    print(f"Total objects: {overall_objects}")
+    logger.info("=" * 30)
+    logger.info("OVERALL TOTALS")
+    logger.info("=" * 30)
+    logger.info(f"Total images: {overall_images}")
+    logger.info(f"Total objects: {overall_objects}")
 
     for class_id in sorted(overall_class_counts):
         name = (
@@ -376,8 +376,7 @@ def dataset_statistics(dataset_dir: Path, splits: Optional[List[str]] = None) ->
             if class_names and class_id < len(class_names)
             else f"class_{class_id}"
         )
-        print(f"  {name} ({class_id}): {overall_class_counts[class_id]}")
-    print()
+        logger.info(f"  {name} ({class_id}): {overall_class_counts[class_id]}")
 
 
 # DATASET MERGING AND SPLITTING UTILITIES
@@ -416,20 +415,20 @@ def merge_dataset_splits(
 
         for img_path in images:
             filename = img_path.name
-            name, ext = os.path.splitext(filename)
+            stem, suffix = img_path.stem, img_path.suffix
             dest_img = output_path / "images" / filename
 
             # Handle filename conflicts
             counter = 1
             while dest_img.exists():
-                dest_img = output_path / "images" / f"{name}_{split}_{counter}{ext}"
+                dest_img = output_path / "images" / f"{stem}_{split}_{counter}{suffix}"
                 counter += 1
 
             # Copy image
             shutil.copy(img_path, dest_img)
 
             # Copy corresponding label if exists
-            label_src = split_path / "labels" / f"{name}.txt"
+            label_src = split_path / "labels" / f"{stem}.txt"
             if label_src.exists():
                 label_dest = output_path / "labels" / (dest_img.stem + ".txt")
                 shutil.copy(label_src, label_dest)
@@ -743,6 +742,202 @@ def remap_yolo_labels(
         total_labels += split_labels
 
     logger.info(f"Label remapping complete: {total_files} files, {total_labels} labels")
+
+
+def remap_flat_labels(
+    dataset_path: Path,
+    label_mapping: Optional[Dict[int, int]] = None,
+) -> None:
+    """
+    Remap YOLO class labels in a flat dataset (images/ + labels/ at root).
+
+    Args:
+        dataset_path: Root path containing images/ and labels/ subdirectories
+        label_mapping: Dictionary mapping old_class_id -> new_class_id
+                      (default: {0: 0, 1: 0, 2: 1})
+    """
+    if label_mapping is None:
+        label_mapping = DEFAULT_LABEL_MAPPING
+
+    label_dir = dataset_path / "labels"
+    if not label_dir.exists():
+        raise ValueError(f"Labels directory not found: {label_dir}")
+
+    logger.info(
+        f"Remapping flat labels in {dataset_path} with mapping: {label_mapping}"
+    )
+
+    total_files = 0
+    total_labels = 0
+
+    for label_file in label_dir.glob("*.txt"):
+        try:
+            with open(label_file, "r") as f:
+                lines = f.readlines()
+
+            new_lines = []
+            for line in lines:
+                parts = line.strip().split()
+                if not parts:
+                    continue
+                old_idx = int(parts[0])
+                if old_idx in label_mapping:
+                    parts[0] = str(label_mapping[old_idx])
+                    new_lines.append(" ".join(parts) + "\n")
+                    total_labels += 1
+
+            with open(label_file, "w") as f:
+                f.writelines(new_lines)
+
+            total_files += 1
+
+        except Exception as e:
+            logger.error(f"Error processing {label_file}: {e}")
+
+    logger.info(
+        f"Flat label remapping complete: {total_files} files, {total_labels} labels"
+    )
+
+
+def filter_flat_labels_by_class(
+    source_path: Path,
+    target_path: Path,
+    allowed_classes: Set[int],
+    class_mapping: Optional[Dict[int, int]] = None,
+) -> None:
+    """
+    Filter a flat YOLO dataset to only keep specified classes and optionally remap them.
+
+    Args:
+        source_path: Source dataset path with images/ and labels/ at root
+        target_path: Target dataset path
+        allowed_classes: Set of class IDs to keep
+        class_mapping: Optional mapping from old_class_id to new_class_id
+    """
+    if class_mapping is None:
+        class_mapping = {cls_id: i for i, cls_id in enumerate(sorted(allowed_classes))}
+
+    src_img_dir = source_path / "images"
+    src_lbl_dir = source_path / "labels"
+    tgt_img_dir = target_path / "images"
+    tgt_lbl_dir = target_path / "labels"
+
+    tgt_img_dir.mkdir(parents=True, exist_ok=True)
+    tgt_lbl_dir.mkdir(parents=True, exist_ok=True)
+
+    if not src_img_dir.exists():
+        raise ValueError(f"Images directory not found: {src_img_dir}")
+
+    logger.info(
+        f"Filtering flat dataset classes {allowed_classes} from {source_path} to {target_path}"
+    )
+    logger.info(f"Class mapping: {class_mapping}")
+
+    total_files = 0
+    total_labels = 0
+
+    for img_path in src_img_dir.glob("*"):
+        if img_path.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+
+        label_path = src_lbl_dir / f"{img_path.stem}.txt"
+        if not label_path.exists():
+            continue
+
+        filtered_lines = []
+        with open(label_path, "r") as f:
+            for line in f:
+                parts = line.strip().split()
+                if not parts:
+                    continue
+                old_class_id = int(parts[0])
+                if old_class_id in allowed_classes:
+                    new_class_id = class_mapping[old_class_id]
+                    parts[0] = str(new_class_id)
+                    filtered_lines.append(" ".join(parts) + "\n")
+                    total_labels += 1
+
+        if filtered_lines:
+            shutil.copy2(img_path, tgt_img_dir / img_path.name)
+            with open(tgt_lbl_dir / f"{img_path.stem}.txt", "w") as f:
+                f.writelines(filtered_lines)
+            total_files += 1
+
+    logger.info(f"Flat filtering complete: {total_files} files, {total_labels} labels")
+
+
+def crop_flat_dataset(
+    input_dir: Path,
+    output_dir: Path,
+    buffer_ratio: float = DEFAULT_BUFFER_RATIO,
+) -> None:
+    """
+    Crop a flat dataset (images/ + labels/ at root) around all objects per image.
+
+    Args:
+        input_dir: Input flat dataset with images/ and labels/ at root
+        output_dir: Output flat dataset directory
+        buffer_ratio: Buffer size around objects (default: 0.20)
+    """
+    img_dir = input_dir / "images"
+    lbl_dir = input_dir / "labels"
+    out_img_dir = output_dir / "images"
+    out_lbl_dir = output_dir / "labels"
+
+    out_img_dir.mkdir(parents=True, exist_ok=True)
+    out_lbl_dir.mkdir(parents=True, exist_ok=True)
+
+    if not img_dir.exists():
+        raise ValueError(f"Images directory not found: {img_dir}")
+
+    logger.info(f"Cropping flat dataset from {input_dir} to {output_dir}")
+    logger.info(f"Buffer ratio: {buffer_ratio}")
+
+    total_images = 0
+
+    for img_path in img_dir.glob("*"):
+        if img_path.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+
+        try:
+            img = cv2.imread(str(img_path))
+            if img is None:
+                continue
+
+            h_orig, w_orig = img.shape[:2]
+            polygons = load_yolo_polygons(
+                lbl_dir / f"{img_path.stem}.txt", w_orig, h_orig
+            )
+
+            if not polygons:
+                continue
+
+            all_points = []
+            for _, pts in polygons:
+                all_points.extend(pts)
+
+            x1, y1, x2, y2 = calculate_crop_bounds(
+                all_points, buffer_ratio, w_orig, h_orig
+            )
+            crop = img[y1:y2, x1:x2]
+            c_h, c_w = crop.shape[:2]
+
+            cv2.imwrite(str(out_img_dir / img_path.name), crop)
+            save_yolo_polygons(
+                out_lbl_dir / img_path.with_suffix(".txt").name,
+                polygons,
+                x1,
+                y1,
+                c_w,
+                c_h,
+            )
+
+            total_images += 1
+
+        except Exception as e:
+            logger.error(f"Error processing {img_path}: {e}")
+
+    logger.info(f"Flat crop complete: {total_images} images processed")
 
 
 # DATASET CONVERSION UTILITIES
@@ -1060,136 +1255,255 @@ def crop_multi_objects(
     logger.info(f"Multi-object cropping complete: {total_images} total images")
 
 
-# MAIN EXECUTION FUNCTIONS
+# PIPELINE FUNCTIONS
 
 
-def main_resolution_analysis(dataset_dir: Optional[Path] = None) -> None:
-    """Main function for resolution analysis."""
-    if dataset_dir is None:
-        dataset_dir = DATASET_SPLIT_DIR
-    analyze_dataset_resolution(dataset_dir)
+def create_data_yaml(dataset_path: Path) -> None:
+    """
+    Create data.yaml file for YOLO dataset.
+
+    Args:
+        dataset_path: Path to dataset directory
+    """
+    # Determine class names based on dataset path
+    if "detect" in dataset_path.name:
+        class_names = ["cherry", "stem"]
+    elif "cls" in dataset_path.name:
+        class_names = ["cherry", "cherry-imperfect"]
+    else:
+        # Default fallback
+        class_names = ["cherry", "cherry-imperfect", "stem"]
+
+    yaml_content = {
+        "train": "train",
+        "val": "val",
+        "test": "test",
+        "nc": len(class_names),
+        "names": class_names,
+        "roboflow": {
+            "workspace": "weatherapp",
+            "project": "cherry-6vrfb",
+            "version": 11,
+            "license": "CC BY 4.0",
+            "url": "https://universe.roboflow.com/weatherapp/cherry-6vrfb/dataset/11",
+        },
+    }
+
+    yaml_path = dataset_path / "data.yaml"
+    with open(yaml_path, "w") as f:
+        yaml.dump(yaml_content, f, default_flow_style=False)
+
+    logger.info(f"Created data.yaml at {yaml_path}")
 
 
-def main_dataset_statistics(dataset_dir: Optional[Path] = None) -> None:
-    """Main function for dataset statistics."""
-    if dataset_dir is None:
-        dataset_dir = DATASET_SPLIT_DIR
-    dataset_statistics(dataset_dir)
-
-
-def main_label_remapping(dataset_dir: Optional[Path] = None) -> None:
-    """Main function for label remapping."""
-    if dataset_dir is None:
-        dataset_dir = DATASET_COMBINED_DIR
-    remap_yolo_labels(dataset_dir)
-
-
-def main_classification_conversion() -> None:
-    """Main function for detection to classification conversion."""
-    convert_detection_to_classification(DATASET_CLIPPED_SPLIT_DIR, DATASET_CLS_ALT_DIR)
-
-
-def main_single_object_cropping() -> None:
-    """Main function for single object cropping."""
-    crop_single_objects(DATASET_SPLIT_DIR, DATASET_CLIPPED_SPLIT_DIR)
-
-
-def main_multi_object_cropping() -> None:
-    """Main function for multi-object cropping."""
-    crop_multi_objects(DATASET_SPLIT_DIR, DATASET_CLIPPED_SPLIT_DIR)
-
-
-def main_dataset_merge(
-    source_dir: Optional[Path] = None, output_dir: Optional[Path] = None
+def filter_labels_by_class(
+    source_path: Path,
+    target_path: Path,
+    allowed_classes: Set[int],
+    class_mapping: Optional[Dict[int, int]] = None,
 ) -> None:
-    """Main function for dataset merging."""
-    if source_dir is None:
-        source_dir = DATASET_SPLIT_DIR
-    if output_dir is None:
-        output_dir = source_dir.parent / "data_merged"
-    merge_dataset_splits(source_dir, output_dir)
+    """
+    Filter YOLO dataset to only keep specified classes and optionally remap them.
+
+    Args:
+        source_path: Source dataset path
+        target_path: Target dataset path
+        allowed_classes: Set of class IDs to keep
+        class_mapping: Optional mapping from old_class_id to new_class_id
+    """
+    splits = DATASET_SPLITS
+
+    if class_mapping is None:
+        class_mapping = {cls_id: i for i, cls_id in enumerate(sorted(allowed_classes))}
+
+    logger.info(
+        f"Filtering classes {allowed_classes} from {source_path} to {target_path}"
+    )
+    logger.info(f"Class mapping: {class_mapping}")
+
+    total_files = 0
+    total_labels = 0
+
+    for split in splits:
+        src_img_dir = source_path / split / "images"
+        src_lbl_dir = source_path / split / "labels"
+        tgt_img_dir = target_path / split / "images"
+        tgt_lbl_dir = target_path / split / "labels"
+
+        # Create target directories
+        tgt_img_dir.mkdir(parents=True, exist_ok=True)
+        tgt_lbl_dir.mkdir(parents=True, exist_ok=True)
+
+        if not src_img_dir.exists():
+            logger.warning(f"Images directory not found: {src_img_dir}")
+            continue
+
+        split_files = 0
+        split_labels = 0
+
+        for img_path in src_img_dir.glob("*"):
+            if img_path.suffix.lower() not in IMAGE_EXTENSIONS:
+                continue
+
+            label_path = src_lbl_dir / f"{img_path.stem}.txt"
+            if not label_path.exists():
+                continue
+
+            # Read and filter labels
+            filtered_lines = []
+            with open(label_path, "r") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if not parts:
+                        continue
+
+                    old_class_id = int(parts[0])
+                    if old_class_id in allowed_classes:
+                        new_class_id = class_mapping[old_class_id]
+                        parts[0] = str(new_class_id)
+                        filtered_lines.append(" ".join(parts) + "\n")
+                        split_labels += 1
+
+            # Only copy if we have valid labels
+            if filtered_lines:
+                shutil.copy2(img_path, tgt_img_dir / img_path.name)
+                with open(tgt_lbl_dir / f"{img_path.stem}.txt", "w") as f:
+                    f.writelines(filtered_lines)
+                split_files += 1
+
+        logger.info(f"  {split}: {split_files} files, {split_labels} labels processed")
+        total_files += split_files
+        total_labels += split_labels
+
+    logger.info(f"Filtering complete: {total_files} files, {total_labels} labels")
 
 
-def main_stratified_split(
-    data_dir: Optional[Path] = None, output_dir: Optional[Path] = None
-) -> None:
-    """Main function for stratified dataset splitting."""
-    if data_dir is None:
-        data_dir = Path("data_merged")
-    if output_dir is None:
-        output_dir = DATASET_SPLIT_DIR
-    stratified_dataset_split(data_dir, output_dir)
+def run_full_dataset_pipeline() -> None:
+    """
+    Run the complete dataset processing pipeline.
+
+    The source dataset (original) is a flat dataset with images/ and labels/ at root.
+    Class IDs in the original: 0=cherry, 1=cherry-imperfect, 2=stem.
+
+    Pipeline steps:
+    1. original (flat) -> data_detect_remapped (flat): remap cherry/cherry-imperfect->0, stem->1
+    2. original (flat) -> data_cls_remapped (flat): keep cherry(0) and cherry-imperfect(1), drop stem
+    3. data_cls_remapped (flat) -> data_cls_clipped (flat): crop around objects
+    4. data_detect_remapped (flat) -> data_detect_stratified (split): stratified train/val/test
+    5. data_cls_clipped (flat) -> data_cls_stratified (split): stratified train/val/test
+    6. data_detect_stratified (split) -> data_detect_augmented (split): augment
+    7. data_cls_stratified (split) -> data_cls_augmented (split): convert to cls format + augment
+    """
+    buffer_ratio = DEFAULT_BUFFER_RATIO
+    random_seed = DEFAULT_RANDOM_SEED
+    split_ratios = DEFAULT_SPLIT_RATIOS
+
+    # Clean all output directories before starting
+    for output_dir in [
+        DATASET_DETECT_REMAPPED_DIR,
+        DATASET_CLS_REMAPPED_DIR,
+        DATASET_CLS_CLIPPED_DIR,
+        DATASET_DETECT_STRATIFIED_DIR,
+        DATASET_CLS_STRATIFIED_DIR,
+        DATASET_DETECT_AUGMENTED_DIR,
+        DATASET_CLS_AUGMENTED_DIR,
+    ]:
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+
+    logger.info("STARTING FULL DATASET PIPELINE")
+
+    # Step 1: original -> data_detect_remapped
+    # Remap: cherry->0, cherry-imperfect->0, stem->1 (binary: fruit vs stem)
+    logger.info(
+        "STEP 1: original -> data_detect_remapped (cherry/cherry-imperfect->0, stem->1)"
+    )
+    shutil.copytree(DATASET_ORIGINAL_DIR, DATASET_DETECT_REMAPPED_DIR)
+    remap_flat_labels(DATASET_DETECT_REMAPPED_DIR, DETECTION_REMAPPED_MAPPING)
+    create_data_yaml(DATASET_DETECT_REMAPPED_DIR)
+
+    # Step 2: original -> data_cls_remapped
+    # Keep cherry(0) and cherry-imperfect(1), drop stem(2)
+    logger.info(
+        "STEP 2: original -> data_cls_remapped (cherry->0, cherry-imperfect->1, drop stem)"
+    )
+    filter_flat_labels_by_class(
+        DATASET_ORIGINAL_DIR,
+        DATASET_CLS_REMAPPED_DIR,
+        allowed_classes={0, 1},
+        class_mapping=CLS_REMAPPED_MAPPING,
+    )
+    create_data_yaml(DATASET_CLS_REMAPPED_DIR)
+
+    # Step 3: data_cls_remapped -> data_cls_clipped
+    # Crop each image tightly around all its objects
+    logger.info("STEP 3: data_cls_remapped -> data_cls_clipped (crop around objects)")
+    crop_flat_dataset(DATASET_CLS_REMAPPED_DIR, DATASET_CLS_CLIPPED_DIR, buffer_ratio)
+    shutil.copy2(
+        DATASET_CLS_REMAPPED_DIR / "data.yaml",
+        DATASET_CLS_CLIPPED_DIR / "data.yaml",
+    )
+
+    # Step 4: data_detect_remapped -> data_detect_stratified
+    logger.info(
+        "STEP 4: data_detect_remapped -> data_detect_stratified (stratified split)"
+    )
+    stratified_dataset_split(
+        DATASET_DETECT_REMAPPED_DIR,
+        DATASET_DETECT_STRATIFIED_DIR,
+        split_ratios,
+        random_seed,
+    )
+    shutil.copy2(
+        DATASET_DETECT_REMAPPED_DIR / "data.yaml",
+        DATASET_DETECT_STRATIFIED_DIR / "data.yaml",
+    )
+
+    # Step 5: data_cls_clipped -> data_cls_stratified
+    logger.info("STEP 5: data_cls_clipped -> data_cls_stratified (stratified split)")
+    stratified_dataset_split(
+        DATASET_CLS_CLIPPED_DIR, DATASET_CLS_STRATIFIED_DIR, split_ratios, random_seed
+    )
+    shutil.copy2(
+        DATASET_CLS_CLIPPED_DIR / "data.yaml",
+        DATASET_CLS_STRATIFIED_DIR / "data.yaml",
+    )
+
+    # Step 6: data_detect_stratified -> data_detect_augmented
+    logger.info("STEP 6: data_detect_stratified -> data_detect_augmented (augment)")
+    augment_detection_dataset(
+        DATASET_DETECT_STRATIFIED_DIR, DATASET_DETECT_AUGMENTED_DIR, augment_factor=4
+    )
+    shutil.copy2(
+        DATASET_DETECT_STRATIFIED_DIR / "data.yaml",
+        DATASET_DETECT_AUGMENTED_DIR / "data.yaml",
+    )
+
+    # Step 7: data_cls_stratified -> data_cls_augmented
+    # augment_classification_dataset expects split/class/images folder structure,
+    # so convert from YOLO detection format first using a temp directory.
+    logger.info(
+        "STEP 7: data_cls_stratified -> data_cls_augmented (convert to cls format + augment)"
+    )
+    temp_cls_dir = DATASET_CLS_STRATIFIED_DIR.parent / "temp_cls_format"
+    if temp_cls_dir.exists():
+        shutil.rmtree(temp_cls_dir)
+    convert_detection_to_classification(DATASET_CLS_STRATIFIED_DIR, temp_cls_dir)
+    augment_classification_dataset(
+        temp_cls_dir, DATASET_CLS_AUGMENTED_DIR, augment_factor=4
+    )
+    shutil.rmtree(temp_cls_dir)
+
+    logger.info("DATASET PIPELINE COMPLETED SUCCESSFULLY!")
+    logger.info("Generated datasets:")
+    logger.info(f"  - Detection remapped:        {DATASET_DETECT_REMAPPED_DIR}")
+    logger.info(f"  - Classification remapped:   {DATASET_CLS_REMAPPED_DIR}")
+    logger.info(f"  - Classification clipped:    {DATASET_CLS_CLIPPED_DIR}")
+    logger.info(f"  - Detection stratified:      {DATASET_DETECT_STRATIFIED_DIR}")
+    logger.info(f"  - Classification stratified: {DATASET_CLS_STRATIFIED_DIR}")
+    logger.info(f"  - Detection augmented:       {DATASET_DETECT_AUGMENTED_DIR}")
+    logger.info(f"  - Classification augmented:  {DATASET_CLS_AUGMENTED_DIR}")
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Dataset Utilities for Cherry Projects"
-    )
-    parser.add_argument(
-        "--action",
-        choices=[
-            "analyze_resolution",
-            "dataset_stats",
-            "remap_labels",
-            "convert_to_cls",
-            "crop_single",
-            "crop_multi",
-            "merge_splits",
-            "stratified_split",
-        ],
-        required=True,
-        help="Action to perform",
-    )
-
-    parser.add_argument("--input_dir", type=Path, help="Input directory path")
-    parser.add_argument("--output_dir", type=Path, help="Output directory path")
-    parser.add_argument(
-        "--buffer_ratio",
-        type=float,
-        default=DEFAULT_BUFFER_RATIO,
-        help="Buffer ratio for cropping (default: 0.20)",
-    )
-    parser.add_argument(
-        "--splits",
-        nargs="+",
-        default=DATASET_SPLITS,
-        help="Dataset splits to process (default: train val test)",
-    )
-    parser.add_argument(
-        "--random_seed",
-        type=int,
-        default=DEFAULT_RANDOM_SEED,
-        help="Random seed for reproducible splits (default: 42)",
-    )
-
-    args = parser.parse_args()
-
-    if args.action == "analyze_resolution":
-        main_resolution_analysis(args.input_dir)
-    elif args.action == "dataset_stats":
-        main_dataset_statistics(args.input_dir)
-    elif args.action == "remap_labels":
-        remap_yolo_labels(args.input_dir, splits=args.splits)
-    elif args.action == "convert_to_cls":
-        convert_detection_to_classification(
-            args.input_dir, args.output_dir, splits=args.splits
-        )
-    elif args.action == "crop_single":
-        crop_single_objects(
-            args.input_dir, args.output_dir, args.buffer_ratio, args.splits
-        )
-    elif args.action == "crop_multi":
-        crop_multi_objects(
-            args.input_dir, args.output_dir, args.buffer_ratio, args.splits
-        )
-    elif args.action == "merge_splits":
-        merge_dataset_splits(args.input_dir, args.output_dir, args.splits)
-    elif args.action == "stratified_split":
-        stratified_dataset_split(
-            args.input_dir,
-            args.output_dir,
-            split_ratios=dict(zip(args.splits, [0.6, 0.2, 0.2][: len(args.splits)])),
-            random_seed=args.random_seed,
-        )
+    run_full_dataset_pipeline()

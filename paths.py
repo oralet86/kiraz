@@ -18,14 +18,15 @@ RESULTS_DIR = Path("results")
 RESULTS_HPO_CLS_DIR = Path("results_hpo_cls")
 RESULTS_HPO_DETECT_DIR = Path("results_hpo_detect")
 
-# Dataset directories
-DATASET_CLS_DIR = Path("datasets/data_class")
-DATASET_COMBINED_DIR = Path("datasets/data_combined")
-DATASET_SPLIT_DIR = Path("datasets/data_split")
-DATASET_CLIPPED_SPLIT_DIR = Path("datasets/data_clipped_split")
-DATASET_CLS_ALT_DIR = Path("datasets/data_cls")
-DATASET_AUGMENTED_CLS_DIR = Path("datasets/augmented_cls")
-DATASET_AUGMENTED_DETECT_DIR = Path("datasets/augmented_detect")
+# New pipeline dataset directories
+DATASET_ORIGINAL_DIR = Path("datasets/original")
+DATASET_DETECT_REMAPPED_DIR = Path("datasets/data_detect_remapped")
+DATASET_CLS_REMAPPED_DIR = Path("datasets/data_cls_remapped")
+DATASET_CLS_CLIPPED_DIR = Path("datasets/data_cls_clipped")
+DATASET_DETECT_STRATIFIED_DIR = Path("datasets/data_detect_stratified")
+DATASET_CLS_STRATIFIED_DIR = Path("datasets/data_cls_stratified")
+DATASET_DETECT_AUGMENTED_DIR = Path("datasets/data_detect_augmented")
+DATASET_CLS_AUGMENTED_DIR = Path("datasets/data_cls_augmented")
 
 # Logs directory
 LOGS_DIR = Path("logs")
@@ -34,9 +35,6 @@ LOGS_DIR = Path("logs")
 MODELS_DIR = Path("models")
 
 # FILE PATHS
-
-# Data configuration files
-DATA_YAML = DATASET_COMBINED_DIR / "data.yaml"
 
 # Results CSV files
 RESULTS_CSV = RESULTS_DIR / Path("results.csv")
@@ -122,13 +120,13 @@ def ensure_directories() -> None:
         RESULTS_HPO_DETECT_DIR,
         LOGS_DIR,
         MODELS_DIR,
-        DATASET_CLS_DIR,
-        DATASET_COMBINED_DIR,
-        DATASET_SPLIT_DIR,
-        DATASET_CLIPPED_SPLIT_DIR,
-        DATASET_CLS_ALT_DIR,
-        DATASET_AUGMENTED_CLS_DIR,
-        DATASET_AUGMENTED_DETECT_DIR,
+        DATASET_DETECT_REMAPPED_DIR,
+        DATASET_CLS_REMAPPED_DIR,
+        DATASET_CLS_CLIPPED_DIR,
+        DATASET_DETECT_STRATIFIED_DIR,
+        DATASET_CLS_STRATIFIED_DIR,
+        DATASET_DETECT_AUGMENTED_DIR,
+        DATASET_CLS_AUGMENTED_DIR,
     ]
 
     for directory in directories:
@@ -146,15 +144,6 @@ if __name__ == "__main__":
     print(f"  LOGS_DIR: {LOGS_DIR}")
     print(f"  MODELS_DIR: {MODELS_DIR}")
 
-    print("\nDataset Directories:")
-    print(f"  DATASET_CLS_DIR: {DATASET_CLS_DIR}")
-    print(f"  DATASET_COMBINED_DIR: {DATASET_COMBINED_DIR}")
-    print(f"  DATASET_SPLIT_DIR: {DATASET_SPLIT_DIR}")
-    print(f"  DATASET_CLIPPED_SPLIT_DIR: {DATASET_CLIPPED_SPLIT_DIR}")
-    print(f"  DATASET_CLS_ALT_DIR: {DATASET_CLS_ALT_DIR}")
-
-    print("\nFile Paths:")
-    print(f"  DATA_YAML: {DATA_YAML}")
     print(f"  RESULTS_CSV: {RESULTS_CSV}")
     print(f"  UNIVERSAL_LOG_FILE: {UNIVERSAL_LOG_FILE}")
 

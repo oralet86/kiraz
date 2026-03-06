@@ -27,10 +27,10 @@ from log import logger
 
 # Import project paths
 from paths import (
-    DATASET_AUGMENTED_CLS_DIR,
-    DATASET_AUGMENTED_DETECT_DIR,
-    DATASET_CLS_DIR,
-    DATASET_COMBINED_DIR,
+    DATASET_CLS_AUGMENTED_DIR,
+    DATASET_DETECT_AUGMENTED_DIR,
+    DATASET_CLS_REMAPPED_DIR,
+    DATASET_DETECT_REMAPPED_DIR,
     ensure_directories,
 )
 
@@ -601,12 +601,12 @@ def main() -> None:
     args = parser.parse_args()
 
     # Clean up old outputs before regenerating
-    if args.task in ["cls", "both"] and DATASET_AUGMENTED_CLS_DIR.exists():
-        logger.info(f"Removing old {DATASET_AUGMENTED_CLS_DIR}...")
-        shutil.rmtree(DATASET_AUGMENTED_CLS_DIR)
-    if args.task in ["detect", "both"] and DATASET_AUGMENTED_DETECT_DIR.exists():
-        logger.info(f"Removing old {DATASET_AUGMENTED_DETECT_DIR}...")
-        shutil.rmtree(DATASET_AUGMENTED_DETECT_DIR)
+    if args.task in ["cls", "both"] and DATASET_CLS_AUGMENTED_DIR.exists():
+        logger.info(f"Removing old {DATASET_CLS_AUGMENTED_DIR}...")
+        shutil.rmtree(DATASET_CLS_AUGMENTED_DIR)
+    if args.task in ["detect", "both"] and DATASET_DETECT_AUGMENTED_DIR.exists():
+        logger.info(f"Removing old {DATASET_DETECT_AUGMENTED_DIR}...")
+        shutil.rmtree(DATASET_DETECT_AUGMENTED_DIR)
 
     # Ensure directories exist
     ensure_directories()
@@ -616,14 +616,14 @@ def main() -> None:
     if args.task in ["cls", "both"]:
         logger.info("Starting classification dataset augmentation...")
         augment_classification_dataset(
-            DATASET_CLS_DIR, DATASET_AUGMENTED_CLS_DIR, augment_factor
+            DATASET_CLS_REMAPPED_DIR, DATASET_CLS_AUGMENTED_DIR, augment_factor
         )
         logger.info("Classification augmentation completed!")
 
     if args.task in ["detect", "both"]:
         logger.info("Starting detection dataset augmentation...")
         augment_detection_dataset(
-            DATASET_COMBINED_DIR, DATASET_AUGMENTED_DETECT_DIR, augment_factor
+            DATASET_DETECT_REMAPPED_DIR, DATASET_DETECT_AUGMENTED_DIR, augment_factor
         )
         logger.info("Detection augmentation completed!")
 

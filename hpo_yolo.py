@@ -22,8 +22,8 @@ from log import logger, add_log_file
 from paths import (
     RESULTS_HPO_CLS_DIR,
     RESULTS_HPO_DETECT_DIR,
-    DATASET_AUGMENTED_CLS_DIR,
-    DATASET_AUGMENTED_DETECT_DIR,
+    DATASET_CLS_AUGMENTED_DIR,
+    DATASET_DETECT_AUGMENTED_DIR,
     MODELS_DIR,
 )
 
@@ -76,7 +76,7 @@ torch.backends.cudnn.conv.fp32_precision = "tf32"  # type: ignore
 
 HPO_OUT_DIR: Path = RESULTS_HPO_CLS_DIR if MODE == "cls" else RESULTS_HPO_DETECT_DIR
 DATASET_DIR: Path = (
-    DATASET_AUGMENTED_CLS_DIR if MODE == "cls" else DATASET_AUGMENTED_DETECT_DIR
+    DATASET_CLS_AUGMENTED_DIR if MODE == "cls" else DATASET_DETECT_AUGMENTED_DIR
 )
 
 
