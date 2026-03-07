@@ -18,7 +18,7 @@ IMGSZ_DETECT = 640
 IMGSZ_CLS = 320
 # Base batch sizes per GB of VRAM
 BASE_BATCH_DETECT = 4
-BASE_BATCH_CLS = 32
+BASE_BATCH_CLS = 24
 CACHE_DETECT = True
 CACHE_CLS = False
 PATIENCE_DETECT = 10
@@ -78,7 +78,7 @@ print(
 def get_default_cls_hyperparams() -> Dict[str, Any]:
     """Get default hyperparameters for classification tasks."""
     return {
-        "lr0": 1e-6,
+        "lr0": 1e-5,
         "lrf": 0.001,
         "optimizer": "AdamW",
         "dropout": 0.5,
@@ -96,6 +96,8 @@ def get_default_cls_hyperparams() -> Dict[str, Any]:
         "mosaic": 0.0,
         "mixup": 0.0,
         "copy_paste": 0.0,
+        # Disable hardcoded Albumentations transforms (Blur, MedianBlur, ToGray, CLAHE)
+        "augmentations": [],
     }
 
 
@@ -125,6 +127,8 @@ def get_default_detect_hyperparams() -> Dict[str, Any]:
         "mixup": 0.0,
         "copy_paste": 0.0,
         "close_mosaic": 0,
+        # Disable hardcoded Albumentations transforms (Blur, MedianBlur, ToGray, CLAHE)
+        "augmentations": [],
     }
 
 
@@ -216,6 +220,60 @@ def get_hyperparams(model_name: str, hpo: bool = False) -> Dict[str, Any]:
         training_config.update(get_default_detect_hyperparams())
 
     return training_config
+
+
+# Non-YOLO (PyTorch-native) training constants
+
+EPOCHS_TORCH = 100
+IMGSZ_CLS_TORCH = 224
+IMGSZ_DETECT_TORCH = 640
+BASE_BATCH_CLS_TORCH = 16  # per GB VRAM
+BASE_BATCH_DETECT_TORCH = 2  # per GB VRAM (Faster R-CNN / DETR are memory-heavy)
+PATIENCE_TORCH = 10
+LR_CLS_TORCH = 1e-4
+LR_DETECT_TORCH = 2e-5
+WEIGHT_DECAY_TORCH = 1e-4
+AMP_TORCH = True
+
+BATCH_CLS_TORCH = get_scaled_batch_size(BASE_BATCH_CLS_TORCH, VRAM_GB)
+BATCH_DETECT_TORCH = get_scaled_batch_size(BASE_BATCH_DETECT_TORCH, VRAM_GB)
+
+
+def get_torch_hyperparams(mode: str) -> Dict[str, Any]:
+    """
+    Get hyperparameters for non-YOLO PyTorch-native models.
+
+    Args:
+        mode: Either "cls" or "detect"
+
+    Returns:
+        Dictionary of hyperparameters for training.
+    """
+    mode = mode.lower()
+    if mode == "cls":
+        return {
+            "lr": LR_CLS_TORCH,
+            "weight_decay": WEIGHT_DECAY_TORCH,
+            "epochs": EPOCHS_TORCH,
+            "batch": BATCH_CLS_TORCH,
+            "imgsz": IMGSZ_CLS_TORCH,
+            "patience": PATIENCE_TORCH,
+            "amp": AMP_TORCH,
+            "workers": WORKERS,
+        }
+    elif mode == "detect":
+        return {
+            "lr": LR_DETECT_TORCH,
+            "weight_decay": WEIGHT_DECAY_TORCH,
+            "epochs": EPOCHS_TORCH,
+            "batch": BATCH_DETECT_TORCH,
+            "imgsz": IMGSZ_DETECT_TORCH,
+            "patience": PATIENCE_TORCH,
+            "amp": AMP_TORCH,
+            "workers": WORKERS,
+        }
+    else:
+        raise ValueError(f"Unknown mode: {mode}. Must be 'cls' or 'detect'")
 
 
 def list_available_models() -> Dict[str, Dict[str, Any]]:
