@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Script to group results by model name and calculate standard error for test metrics only.
-Includes model_name, sample_count, and test_* columns with their standard errors.
+Script to group results by model name and calculate statistics for test metrics only.
+Includes model_name, sample_count, and test_* columns with their standard deviations and standard errors.
 Excludes train_*, val_*, mode, seed, and timestamp columns.
 """
 
@@ -43,14 +43,14 @@ def get_columns_to_keep(df: pd.DataFrame) -> list:
 
 def average_metrics_by_model(csv_path: str, output_path: str = None) -> pd.DataFrame:
     """
-    Group results by model name and calculate standard error for test metrics only.
+    Group results by model name and calculate statistics for test metrics only.
 
     Args:
         csv_path: Path to the input CSV file
         output_path: Optional path to save the averaged results
 
     Returns:
-        DataFrame with test metrics and standard errors grouped by model name
+        DataFrame with test metrics, standard deviations, and standard errors grouped by model name
     """
     # Read the CSV file
     try:
@@ -108,14 +108,17 @@ def average_metrics_by_model(csv_path: str, output_path: str = None) -> pd.DataF
                 "sample_count"
             ].pow(0.5)
 
-    # Keep only model_name, sample_count, and test columns with their std_err
+    # Keep only model_name, sample_count, and test columns with their std and std_err
     final_columns = ["model_name", "sample_count"]
 
-    # Add test means and their standard errors
+    # Add test means, standard deviations, and standard errors
     for col in test_cols:
         if col in grouped_stats.columns:
             final_columns.append(col)
+        std_col = f"{col}_std"
         se_col = f"{col}_std_err"
+        if std_col in grouped_stats.columns:
+            final_columns.append(std_col)
         if se_col in grouped_stats.columns:
             final_columns.append(se_col)
 
@@ -130,7 +133,9 @@ def average_metrics_by_model(csv_path: str, output_path: str = None) -> pd.DataF
     if output_path:
         try:
             grouped_stats.to_csv(output_path, index=False)
-            print(f"Saved test results with standard errors to {output_path}")
+            print(
+                f"Saved test results with standard deviations and standard errors to {output_path}"
+            )
         except Exception as e:
             print(f"Error saving to {output_path}: {e}")
 
@@ -168,9 +173,13 @@ def main():
     result_df = average_metrics_by_model(input_path, output_path)
 
     print("-" * 50)
-    print(f"Test results with standard errors for {len(result_df)} models:")
+    print(
+        f"Test results with standard deviations and standard errors for {len(result_df)} models:"
+    )
     print(result_df[["model_name", "sample_count"]].to_string(index=False))
-    print(f"\nFull test results with standard errors saved to {output_path}")
+    print(
+        f"\nFull test results with standard deviations and standard errors saved to {output_path}"
+    )
 
 
 if __name__ == "__main__":
