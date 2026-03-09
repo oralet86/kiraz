@@ -31,7 +31,7 @@ DATASET_CLS_AUGMENTED_DIR = Path("datasets/data_cls_augmented")
 # Logs directory
 LOGS_DIR = Path("logs")
 
-# Models directory
+# Python package for model builders and storage for pretrained weights (.pt)
 MODELS_DIR = Path("models")
 
 # FILE PATHS

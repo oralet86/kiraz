@@ -2,8 +2,13 @@
 
 Supported detection:    faster-rcnn-r50, faster-rcnn-r101, detr-r50, detr-r101
 Supported classification: resnet50, resnet101, efficientnet-b{0..3},
-  convnext-tiny, convnext-small, convnext-large,
+  convnext-tiny, convnext-small, convnext-base,
+  convnextv2-atto, convnextv2-femto, convnextv2-pico,
+  convnextv2-nano, convnextv2-tiny, convnextv2-base,
   vit-small, vit-base, deit-small, deit-base,
+  mobilevit-xxs, mobilevit-xs, mobilevit-s,
+  mobilevitv2-050, mobilevitv2-075, mobilevitv2-100,
+  swin-tiny,
   mobilenet-v2, mobilenet-v3-small, mobilenet-v3-large
 """
 
@@ -29,16 +34,19 @@ from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets import ImageFolder
-import torchvision.models as tv_models
-import torchvision.models.detection as tv_detect
 import torchvision.transforms as T
-from torchvision.models.detection import FasterRCNN
-from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.ops import box_iou
 from tqdm import tqdm
 from torchmetrics.detection import MeanAveragePrecision
 
+from models import (
+    CLS_MODELS,
+    DETECT_MODELS,
+    FRCNN_MODELS,
+    build_cls_model,
+    build_detr_model,
+    build_frcnn_model,
+)
 from hyperparams import get_torch_hyperparams
 from log import logger, add_log_file
 from paths import (
@@ -47,20 +55,6 @@ from paths import (
     RESULTS_DIR,
     RESULTS_CSV,
 )
-
-try:
-    import timm
-
-    HAS_TIMM = True
-except ImportError:
-    HAS_TIMM = False
-
-try:
-    from transformers import DetrForObjectDetection, DetrImageProcessor
-
-    HAS_TRANSFORMERS = True
-except ImportError:
-    HAS_TRANSFORMERS = False
 
 # Constants
 
@@ -72,28 +66,6 @@ NUM_DETECT_CLASSES = 3  # background=0, cherry=1, stem=2
 NUM_DETR_LABELS = 2  # cherry=0, stem=1
 DETECT_SCORE_THRESH = 0.5
 IOU_MATCH_THRESH = 0.5
-
-CLS_MODELS = {
-    "resnet50",
-    "resnet101",
-    "efficientnet-b0",
-    "efficientnet-b1",
-    "efficientnet-b2",
-    "efficientnet-b3",
-    "convnext-tiny",
-    "convnext-small",
-    "convnext-large",
-    "vit-small",
-    "vit-base",
-    "deit-small",
-    "deit-base",
-    "mobilenet-v2",
-    "mobilenet-v3-small",
-    "mobilenet-v3-large",
-}
-FRCNN_MODELS = {"faster-rcnn-r50", "faster-rcnn-r101"}
-DETR_MODELS = {"detr-r50", "detr-r101"}
-DETECT_MODELS = FRCNN_MODELS | DETR_MODELS
 
 # Argument parsing
 
@@ -242,96 +214,6 @@ def _detr_collate(
 ) -> Tuple[List[Image.Image], List[Dict[str, torch.Tensor]], List[Tuple[int, int]]]:
     images, labels, sizes = zip(*batch)
     return list(images), list(labels), list(sizes)
-
-
-# Model builders
-
-
-def build_cls_model(model_name: str, num_classes: int) -> nn.Module:
-    """Build a pretrained classification model with a replaced head."""
-    name = model_name.lower()
-    if name == "resnet50":
-        m = tv_models.resnet50(weights="DEFAULT")
-        m.fc = nn.Linear(m.fc.in_features, num_classes)
-    elif name == "resnet101":
-        m = tv_models.resnet101(weights="DEFAULT")
-        m.fc = nn.Linear(m.fc.in_features, num_classes)
-    elif name.startswith("efficientnet-"):
-        builder = getattr(tv_models, f"efficientnet_{name.split('-')[1]}")
-        m = builder(weights="DEFAULT")
-        m.classifier[1] = nn.Linear(m.classifier[1].in_features, num_classes)
-    elif name.startswith("convnext-"):
-        builder = getattr(tv_models, f"convnext_{name.split('-')[1]}")
-        m = builder(weights="DEFAULT")
-        m.classifier[2] = nn.Linear(m.classifier[2].in_features, num_classes)
-    elif name in ("vit-small", "vit-base"):
-        if not HAS_TIMM:
-            raise ImportError("timm required for ViT models")
-        timm_name = (
-            "vit_small_patch16_224" if name == "vit-small" else "vit_base_patch16_224"
-        )
-        m = timm.create_model(timm_name, pretrained=True, num_classes=num_classes)
-    elif name in ("deit-small", "deit-base"):
-        if not HAS_TIMM:
-            raise ImportError("timm required for DeiT models")
-        timm_name = (
-            "deit_small_patch16_224"
-            if name == "deit-small"
-            else "deit_base_patch16_224"
-        )
-        m = timm.create_model(timm_name, pretrained=True, num_classes=num_classes)
-    elif name == "mobilenet-v2":
-        m = tv_models.mobilenet_v2(weights="DEFAULT")
-        m.classifier[1] = nn.Linear(m.classifier[1].in_features, num_classes)
-    elif name == "mobilenet-v3-small":
-        m = tv_models.mobilenet_v3_small(weights="DEFAULT")
-        m.classifier[3] = nn.Linear(m.classifier[3].in_features, num_classes)
-    elif name == "mobilenet-v3-large":
-        m = tv_models.mobilenet_v3_large(weights="DEFAULT")
-        m.classifier[3] = nn.Linear(m.classifier[3].in_features, num_classes)
-    else:
-        raise ValueError(f"Unknown classification model: {model_name}")
-    return m
-
-
-def build_frcnn_model(model_name: str, num_classes: int) -> nn.Module:
-    """Build a pretrained Faster R-CNN with a replaced prediction head."""
-    name = model_name.lower()
-    if name == "faster-rcnn-r50":
-        m = tv_detect.fasterrcnn_resnet50_fpn_v2(weights="DEFAULT")
-        in_f = m.roi_heads.box_predictor.cls_score.in_features
-        m.roi_heads.box_predictor = FastRCNNPredictor(in_f, num_classes)
-    elif name == "faster-rcnn-r101":
-        backbone = resnet_fpn_backbone(
-            "resnet101", weights="DEFAULT", trainable_layers=3
-        )
-        m = FasterRCNN(backbone, num_classes=num_classes)
-    else:
-        raise ValueError(f"Unknown Faster R-CNN model: {model_name}")
-    return m
-
-
-def build_detr_model(
-    model_name: str, num_labels: int
-) -> Tuple[nn.Module, "DetrImageProcessor"]:
-    """Build a pretrained DETR model with a replaced classification head."""
-    if not HAS_TRANSFORMERS:
-        raise ImportError("transformers required for DETR models")
-    hf_ids = {
-        "detr-r50": "facebook/detr-resnet-50",
-        "detr-r101": "facebook/detr-resnet-101",
-    }
-    name = model_name.lower()
-    if name not in hf_ids:
-        raise ValueError(f"Unknown DETR model: {model_name}")
-    hf_id = hf_ids[name]
-    model = DetrForObjectDetection.from_pretrained(
-        hf_id, num_labels=num_labels, ignore_mismatched_sizes=True
-    )
-    processor = DetrImageProcessor.from_pretrained(
-        hf_id, size={"shortest_edge": 480, "longest_edge": 640}
-    )
-    return model, processor
 
 
 # Training helpers
@@ -921,7 +803,7 @@ def log_results_to_file(
 
 def run_cls(ts: str) -> Tuple[float, Dict[str, Any]]:
     """Full classification training + evaluation pipeline."""
-    hp = get_torch_hyperparams("cls")
+    hp = get_torch_hyperparams("cls", MODEL_NAME)
     if args.epoch is not None:
         hp["epochs"] = args.epoch
         logger.info(f"Overriding epochs to {args.epoch}")
@@ -957,7 +839,7 @@ def run_cls(ts: str) -> Tuple[float, Dict[str, Any]]:
     model = build_cls_model(MODEL_NAME, num_classes=NUM_CLS_CLASSES)
     model = model.to(DEVICE)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=hp.get("label_smoothing", 0.0))
     optimizer = optim.AdamW(
         model.parameters(), lr=hp["lr"], weight_decay=hp["weight_decay"]
     )

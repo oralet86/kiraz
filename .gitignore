@@ -4,7 +4,6 @@ datasets
 data_split
 data_resized
 data_resized_split
-models
 results
 results_hpo_cls
 results_hpo_detect
