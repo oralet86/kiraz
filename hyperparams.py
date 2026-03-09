@@ -9,70 +9,22 @@ parameters for specific models.
 from typing import Any, Dict
 import os
 import warnings
-import torch
 
 # Global training constants
 EPOCHS_DETECT = 100
 EPOCHS_CLS = 100
 IMGSZ_DETECT = 640
 IMGSZ_CLS = 320
-# Base batch sizes per GB of VRAM
-BASE_BATCH_DETECT = 4
-BASE_BATCH_CLS = 24
-CACHE_DETECT = True
+BATCH_DETECT = 24
+BATCH_CLS = 120
+CACHE_DETECT = False
 CACHE_CLS = False
 PATIENCE_DETECT = 10
 PATIENCE_CLS = 10
 DETERMINISTIC = False
 COS_LR = True
-WORKERS = max(1, int((os.cpu_count() or 1) * 0.5))
+WORKERS = min(max(1, int((os.cpu_count() or 1) * 0.5)), 8)
 AMP = True
-
-
-def get_vram_gb() -> float:
-    """Get available VRAM in GB."""
-    # Assume torch is available and CUDA is available as requested
-    total_vram = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-    return total_vram
-
-
-def get_scaled_batch_size(base_batch: int, vram_gb: float = None) -> int:
-    """
-    Scale batch size based on available VRAM.
-
-    Args:
-        base_batch: Base batch size per GB of VRAM
-        vram_gb: Available VRAM in GB (auto-detected if None)
-
-    Returns:
-        Scaled batch size (ensured to be even and at least 2)
-    """
-    if vram_gb is None:
-        vram_gb = get_vram_gb()
-
-    # Round VRAM up to integer and multiply by base batch
-    vram_int = int(vram_gb) + (1 if vram_gb % 1 >= 0.5 else 0)  # Round up
-    scaled = base_batch * vram_int
-
-    # Ensure even integer, roll down if odd
-    if scaled % 2 != 0:
-        scaled -= 1
-
-    # Ensure at least 2
-    return max(2, scaled)
-
-
-# Dynamic batch sizes based on available VRAM
-VRAM_GB = get_vram_gb()
-BATCH_DETECT = get_scaled_batch_size(BASE_BATCH_DETECT, VRAM_GB)
-BATCH_CLS = get_scaled_batch_size(BASE_BATCH_CLS, VRAM_GB)
-
-# Log VRAM detection and batch scaling
-device_name = torch.cuda.get_device_name(0)
-print(f"Detected {VRAM_GB:.1f}GB VRAM on {device_name}")
-print(
-    f"Batch sizes scaled for {VRAM_GB:.1f}GB VRAM: detect={BATCH_DETECT}, cls={BATCH_CLS}"
-)
 
 
 def get_default_cls_hyperparams() -> Dict[str, Any]:
@@ -225,35 +177,136 @@ def get_hyperparams(model_name: str, hpo: bool = False) -> Dict[str, Any]:
 # Non-YOLO (PyTorch-native) training constants
 
 EPOCHS_TORCH = 100
-IMGSZ_CLS_TORCH = 224
+IMGSZ_CLS_TORCH = 320
 IMGSZ_DETECT_TORCH = 640
-BASE_BATCH_CLS_TORCH = 16  # per GB VRAM
-BASE_BATCH_DETECT_TORCH = 2  # per GB VRAM (Faster R-CNN / DETR are memory-heavy)
+BATCH_CLS_TORCH = 120
+BATCH_DETECT_TORCH = 16
 PATIENCE_TORCH = 10
 LR_CLS_TORCH = 1e-4
 LR_DETECT_TORCH = 2e-5
 WEIGHT_DECAY_TORCH = 1e-4
 AMP_TORCH = True
 
-BATCH_CLS_TORCH = get_scaled_batch_size(BASE_BATCH_CLS_TORCH, VRAM_GB)
-BATCH_DETECT_TORCH = get_scaled_batch_size(BASE_BATCH_DETECT_TORCH, VRAM_GB)
+# Per-model hyperparameter overrides for PyTorch-native classification models.
+# convnext-tiny works well with defaults; larger ConvNeXt models overfit, so we
+# apply stronger regularisation (higher weight_decay, lower lr, label smoothing).
+_TORCH_MODEL_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    # ConvNeXt V1
+    "convnext-tiny": {},
+    "convnext-small": {
+        "lr": 5e-5,
+        "weight_decay": 5e-4,
+        "label_smoothing": 0.1,
+    },
+    "convnext-base": {
+        "lr": 5e-5,
+        "weight_decay": 5e-4,
+        "label_smoothing": 0.1,
+    },
+    # ConvNeXt V2 — tiny models match tiny V1 capacity, so defaults are fine
+    "convnextv2-atto": {},
+    "convnextv2-femto": {},
+    "convnextv2-pico": {},
+    "convnextv2-nano": {},
+    "convnextv2-tiny": {},
+    "convnextv2-small": {
+        "lr": 5e-5,
+        "weight_decay": 5e-4,
+        "label_smoothing": 0.1,
+    },
+    "convnextv2-base": {
+        "lr": 5e-5,
+        "weight_decay": 5e-4,
+        "label_smoothing": 0.1,
+    },
+    # ViT — vit-small outperforming vit-base in prior runs confirms overfitting
+    # even at the small scale, so all ViT variants get explicit regularisation.
+    "vit-small": {
+        "lr": 5e-5,
+        "weight_decay": 3e-4,
+        "label_smoothing": 0.1,
+    },
+    "vit-base": {
+        "lr": 2e-5,
+        "weight_decay": 5e-4,
+        "label_smoothing": 0.1,
+    },
+    # DeiT — same tiered policy as ViT equivalents
+    "deit-small": {
+        "lr": 5e-5,
+        "weight_decay": 3e-4,
+        "label_smoothing": 0.1,
+    },
+    "deit-base": {
+        "lr": 2e-5,
+        "weight_decay": 5e-4,
+        "label_smoothing": 0.1,
+    },
+    # MobileViT V1 — very compact (~1–6 M params) but still attention-based;
+    # mild regularisation + native 256×256 input size
+    "mobilevit-xxs": {
+        "lr": 7e-5,
+        "weight_decay": 2e-4,
+        "label_smoothing": 0.05,
+        "imgsz": 256,
+    },
+    "mobilevit-xs": {
+        "lr": 7e-5,
+        "weight_decay": 2e-4,
+        "label_smoothing": 0.05,
+        "imgsz": 256,
+    },
+    "mobilevit-s": {
+        "lr": 5e-5,
+        "weight_decay": 3e-4,
+        "label_smoothing": 0.1,
+        "imgsz": 256,
+    },
+    # MobileViT V2 — separable attention, similar capacity tiers to V1
+    "mobilevitv2-050": {
+        "lr": 7e-5,
+        "weight_decay": 2e-4,
+        "label_smoothing": 0.05,
+        "imgsz": 256,
+    },
+    "mobilevitv2-075": {
+        "lr": 7e-5,
+        "weight_decay": 2e-4,
+        "label_smoothing": 0.05,
+        "imgsz": 256,
+    },
+    "mobilevitv2-100": {
+        "lr": 5e-5,
+        "weight_decay": 3e-4,
+        "label_smoothing": 0.1,
+        "imgsz": 256,
+    },
+    # Swin-Tiny — ~28 M params; treat like ViT-small in terms of regularisation
+    "swin-tiny": {
+        "lr": 3e-5,
+        "weight_decay": 5e-4,
+        "label_smoothing": 0.1,
+    },
+}
 
 
-def get_torch_hyperparams(mode: str) -> Dict[str, Any]:
+def get_torch_hyperparams(mode: str, model_name: str = "") -> Dict[str, Any]:
     """
     Get hyperparameters for non-YOLO PyTorch-native models.
 
     Args:
-        mode: Either "cls" or "detect"
+        mode: Either "cls" or "detect".
+        model_name: Optional model name used to apply per-model overrides.
 
     Returns:
         Dictionary of hyperparameters for training.
     """
     mode = mode.lower()
     if mode == "cls":
-        return {
+        base: Dict[str, Any] = {
             "lr": LR_CLS_TORCH,
             "weight_decay": WEIGHT_DECAY_TORCH,
+            "label_smoothing": 0.0,
             "epochs": EPOCHS_TORCH,
             "batch": BATCH_CLS_TORCH,
             "imgsz": IMGSZ_CLS_TORCH,
@@ -262,7 +315,7 @@ def get_torch_hyperparams(mode: str) -> Dict[str, Any]:
             "workers": WORKERS,
         }
     elif mode == "detect":
-        return {
+        base = {
             "lr": LR_DETECT_TORCH,
             "weight_decay": WEIGHT_DECAY_TORCH,
             "epochs": EPOCHS_TORCH,
@@ -274,6 +327,42 @@ def get_torch_hyperparams(mode: str) -> Dict[str, Any]:
         }
     else:
         raise ValueError(f"Unknown mode: {mode}. Must be 'cls' or 'detect'")
+
+    overrides = _TORCH_MODEL_OVERRIDES.get(model_name.lower(), {})
+    base.update(overrides)
+    return base
+
+
+# =============================================================================
+# Pipeline (inference / sorting) hyperparameters
+# =============================================================================
+
+DETECTION_CONF_THRESH: float = 0.4      # minimum detector confidence to keep a box
+TRACK_BUFFER: int = 30                  # frames to keep a LOST track alive
+MIN_SAMPLES_FOR_DECISION: int = 3       # minimum classified samples before deciding
+MAX_SAMPLES_PER_TRACK: int = 10         # cap samples per track to reduce redundancy
+SAMPLE_EVERY_N_FRAMES: int = 2          # sub-sample frames to reduce correlation
+CROP_BUFFER_PX: int = 15               # pixel padding around bbox when cropping
+IMPERFECT_THRESHOLD: float = 0.5       # weighted avg above this → IMPERFECT
+CENTER_WEIGHT_SIGMA: float = 0.3        # Gaussian σ for center-offset weighting
+ARUCO_REAL_SIZE_CM: float = 3.0         # known physical size of the ArUco marker
+ARUCO_CALIB_FRAMES: int = 30            # frames to collect during ArUco calibration
+
+
+def get_pipeline_hyperparams() -> Dict[str, Any]:
+    """Get hyperparameters for the real-time sorting pipeline."""
+    return {
+        "detection_conf_thresh": DETECTION_CONF_THRESH,
+        "track_buffer": TRACK_BUFFER,
+        "min_samples_for_decision": MIN_SAMPLES_FOR_DECISION,
+        "max_samples_per_track": MAX_SAMPLES_PER_TRACK,
+        "sample_every_n_frames": SAMPLE_EVERY_N_FRAMES,
+        "crop_buffer_px": CROP_BUFFER_PX,
+        "imperfect_threshold": IMPERFECT_THRESHOLD,
+        "center_weight_sigma": CENTER_WEIGHT_SIGMA,
+        "aruco_real_size_cm": ARUCO_REAL_SIZE_CM,
+        "aruco_calib_frames": ARUCO_CALIB_FRAMES,
+    }
 
 
 def list_available_models() -> Dict[str, Dict[str, Any]]:
