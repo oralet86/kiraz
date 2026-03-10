@@ -14,7 +14,6 @@ Classification:
 
 Detection:
     Faster R-CNN:  faster-rcnn-r{50,101}
-    DETR:          detr-r{50,101}
 """
 
 from __future__ import annotations
@@ -26,10 +25,7 @@ from models.convnext import (
     build_convnext_model,
 )
 from models.frcnn import (
-    DETR_MODELS,
-    DETECT_MODELS,
     FRCNN_MODELS,
-    build_detr_model,
     build_frcnn_model,
 )
 from models.efficientnet import EFFICIENTNET_MODELS, build_efficientnet_model
@@ -54,6 +50,8 @@ CLS_MODELS = (
     | CONVNEXT_MODELS
     | TRANSFORMER_MODELS
 )
+
+DETECT_MODELS = FRCNN_MODELS  # Add other detection models here
 
 
 def build_cls_model(model_name: str, num_classes: int) -> nn.Module:
@@ -96,8 +94,6 @@ __all__ = [
     "CONVNEXT_V1_MODELS",
     "CONVNEXT_V2_MODELS",
     "DEIT_MODELS",
-    "DETECT_MODELS",
-    "DETR_MODELS",
     "EFFICIENTNET_MODELS",
     "FRCNN_MODELS",
     "MOBILENET_MODELS",
@@ -110,7 +106,6 @@ __all__ = [
     # Builders
     "build_cls_model",
     "build_convnext_model",
-    "build_detr_model",
     "build_efficientnet_model",
     "build_frcnn_model",
     "build_mobilenet_model",

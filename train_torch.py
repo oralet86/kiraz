@@ -1,6 +1,6 @@
 """PyTorch-native training for non-YOLO detection and classification models.
 
-Supported detection:    faster-rcnn-r50, faster-rcnn-r101, detr-r50, detr-r101
+Supported detection:    faster-rcnn-r50, faster-rcnn-r101
 Supported classification: resnet50, resnet101, efficientnet-b{0..3},
   convnext-tiny, convnext-small, convnext-base,
   convnextv2-atto, convnextv2-femto, convnextv2-pico,
@@ -44,7 +44,6 @@ from models import (
     DETECT_MODELS,
     FRCNN_MODELS,
     build_cls_model,
-    build_detr_model,
     build_frcnn_model,
 )
 from hyperparams import get_torch_hyperparams
@@ -63,7 +62,6 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
 NUM_CLS_CLASSES = 2
 NUM_DETECT_CLASSES = 3  # background=0, cherry=1, stem=2
-NUM_DETR_LABELS = 2  # cherry=0, stem=1
 DETECT_SCORE_THRESH = 0.5
 IOU_MATCH_THRESH = 0.5
 
@@ -159,61 +157,11 @@ class YoloDetectionDataset(Dataset):
         return img_t, {"boxes": boxes, "labels": labels}
 
 
-class DetrDetectionDataset(Dataset):
-    """YOLO-format detection split for DETR.
-
-    Returns PIL images and labels with 0-indexed class_labels and
-    normalized [cx, cy, w, h] boxes.
-    """
-
-    def __init__(self, split_dir: Path) -> None:
-        self.label_dir = split_dir / "labels"
-        self.image_paths: List[Path] = sorted(
-            p
-            for p in (split_dir / "images").iterdir()
-            if p.suffix.lower() in IMAGE_EXTS
-        )
-
-    def __len__(self) -> int:
-        return len(self.image_paths)
-
-    def __getitem__(
-        self, idx: int
-    ) -> Tuple[Image.Image, Dict[str, torch.Tensor], Tuple[int, int]]:
-        img_path = self.image_paths[idx]
-        image = Image.open(img_path).convert("RGB")
-        orig_w, orig_h = image.size
-        label_path = self.label_dir / img_path.with_suffix(".txt").name
-
-        cls_list: List[int] = []
-        box_list: List[List[float]] = []
-        if label_path.exists():
-            for line in label_path.read_text().strip().splitlines():
-                parts = line.strip().split()
-                if len(parts) < 5:
-                    continue
-                cls_list.append(int(parts[0]))
-                box_list.append([float(x) for x in parts[1:5]])
-
-        label = {
-            "class_labels": torch.as_tensor(cls_list, dtype=torch.int64),
-            "boxes": torch.as_tensor(box_list, dtype=torch.float32).reshape(-1, 4),
-        }
-        return image, label, (orig_h, orig_w)
-
-
 def _frcnn_collate(
     batch: List[Tuple[torch.Tensor, Dict[str, torch.Tensor]]],
 ) -> Tuple[List[torch.Tensor], List[Dict[str, torch.Tensor]]]:
     images, targets = zip(*batch)
     return list(images), list(targets)
-
-
-def _detr_collate(
-    batch: List[Tuple[Image.Image, Dict[str, torch.Tensor], Tuple[int, int]]],
-) -> Tuple[List[Image.Image], List[Dict[str, torch.Tensor]], List[Tuple[int, int]]]:
-    images, labels, sizes = zip(*batch)
-    return list(images), list(labels), list(sizes)
 
 
 # Training helpers
@@ -316,46 +264,6 @@ def train_frcnn_epoch(
         ):
             loss_dict = model(images, targets)
             loss = sum(loss_dict.values())
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        total += loss.item()
-        count += 1
-        pbar.set_postfix(loss=f"{total / count:.4f}")
-    return total / max(len(loader), 1)
-
-
-def train_detr_epoch(
-    model: nn.Module,
-    processor: "DetrImageProcessor",
-    loader: DataLoader,
-    optimizer: optim.Optimizer,
-    scaler: GradScaler,
-    device: str,
-    epoch: int,
-    epochs: int,
-) -> float:
-    """One DETR training epoch. Returns mean loss."""
-    model.train()
-    total = 0.0
-    count = 0
-    pbar = tqdm(loader, desc=f"E{epoch}/{epochs} train", leave=False, unit="batch")
-    for pil_images, labels, _ in pbar:
-        enc = processor(images=pil_images, return_tensors="pt")
-        pixel_values = enc["pixel_values"].to(device, non_blocking=True)
-        pixel_mask = enc["pixel_mask"].to(device, non_blocking=True)
-        batch_labels = [{k: v.to(device) for k, v in lbl.items()} for lbl in labels]
-        optimizer.zero_grad(set_to_none=True)
-        with autocast(
-            enabled=scaler.is_enabled(),
-            device_type="cuda" if DEVICE == "cuda" else "cpu",
-        ):
-            out = model(
-                pixel_values=pixel_values,
-                pixel_mask=pixel_mask,
-                labels=batch_labels,
-            )
-            loss = out.loss
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
@@ -631,123 +539,6 @@ def compute_frcnn_val_loss(
     return total / max(len(loader), 1)
 
 
-def eval_detr_split(
-    model: nn.Module,
-    processor: "DetrImageProcessor",
-    dataset_dir: Path,
-    split: str,
-    batch: int,
-    workers: int,
-    device: str,
-) -> Dict[str, float]:
-    """Evaluate DETR on one split."""
-    dataset = DetrDetectionDataset(dataset_dir / split)
-    loader = DataLoader(
-        dataset,
-        batch_size=batch,
-        shuffle=False,
-        num_workers=workers,
-        collate_fn=_detr_collate,
-    )
-
-    all_preds: List[Dict[str, torch.Tensor]] = []
-    all_targets: List[Dict[str, torch.Tensor]] = []
-    total_pre = total_inf = total_post = 0.0
-    n_images = 0
-
-    model.eval()
-    with torch.no_grad():
-        for pil_images, labels, orig_sizes in loader:
-            t0 = time.perf_counter()
-            enc = processor(images=pil_images, return_tensors="pt")
-            pixel_values = enc["pixel_values"].to(device, non_blocking=True)
-            pixel_mask = enc["pixel_mask"].to(device, non_blocking=True)
-            t1 = time.perf_counter()
-            outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask)
-            if device == "cuda":
-                torch.cuda.synchronize()
-            t2 = time.perf_counter()
-            results = processor.post_process_object_detection(
-                outputs, threshold=0.0, target_sizes=list(orig_sizes)
-            )
-            for r, lbl, (orig_h, orig_w) in zip(results, labels, orig_sizes):
-                all_preds.append(
-                    {
-                        "boxes": r["boxes"].cpu(),
-                        "labels": (r["labels"] + 1).cpu(),
-                        "scores": r["scores"].cpu(),
-                    }
-                )
-                gt_boxes = lbl["boxes"].clone()
-                if gt_boxes.numel() > 0:
-                    cx = gt_boxes[:, 0]
-                    cy = gt_boxes[:, 1]
-                    bw = gt_boxes[:, 2]
-                    bh = gt_boxes[:, 3]
-                    gt_boxes = torch.stack(
-                        [
-                            (cx - bw / 2) * orig_w,
-                            (cy - bh / 2) * orig_h,
-                            (cx + bw / 2) * orig_w,
-                            (cy + bh / 2) * orig_h,
-                        ],
-                        dim=1,
-                    )
-                all_targets.append(
-                    {
-                        "boxes": gt_boxes.cpu(),
-                        "labels": (lbl["class_labels"] + 1).cpu(),
-                    }
-                )
-            t3 = time.perf_counter()
-            total_pre += (t1 - t0) * 1000
-            total_inf += (t2 - t1) * 1000
-            total_post += (t3 - t2) * 1000
-            n_images += len(pil_images)
-
-    metrics = _compute_detect_metrics(all_preds, all_targets)
-    n = max(n_images, 1)
-    metrics["speed_preprocess_ms"] = total_pre / n
-    metrics["speed_inference_ms"] = total_inf / n
-    metrics["speed_postprocess_ms"] = total_post / n
-    return metrics
-
-
-def compute_detr_val_loss(
-    model: nn.Module,
-    processor: "DetrImageProcessor",
-    dataset_dir: Path,
-    batch: int,
-    workers: int,
-    device: str,
-) -> float:
-    """Compute DETR loss on the validation split (train mode, no_grad)."""
-    dataset = DetrDetectionDataset(dataset_dir / "val")
-    loader = DataLoader(
-        dataset,
-        batch_size=batch,
-        shuffle=False,
-        num_workers=workers,
-        collate_fn=_detr_collate,
-    )
-    model.train()
-    total = 0.0
-    with torch.no_grad():
-        for pil_images, labels, _ in loader:
-            enc = processor(images=pil_images, return_tensors="pt")
-            pixel_values = enc["pixel_values"].to(device, non_blocking=True)
-            pixel_mask = enc["pixel_mask"].to(device, non_blocking=True)
-            batch_labels = [{k: v.to(device) for k, v in lbl.items()} for lbl in labels]
-            out = model(
-                pixel_values=pixel_values,
-                pixel_mask=pixel_mask,
-                labels=batch_labels,
-            )
-            total += out.loss.item()
-    model.eval()
-    return total / max(len(loader), 1)
-
-
 # Results logging
 
 
@@ -997,106 +788,6 @@ def run_frcnn(ts: str) -> Tuple[float, Dict[str, Any]]:
     return train_time, all_metrics
 
 
-def run_detr(ts: str) -> Tuple[float, Dict[str, Any]]:
-    """Full DETR training + evaluation pipeline."""
-    hp = get_torch_hyperparams("detect")
-    if args.epoch is not None:
-        hp["epochs"] = args.epoch
-        logger.info(f"Overriding epochs to {args.epoch}")
-    batch = apply_batch_mult(hp["batch"], args.batch_mult)
-    logger.info(f"Batch size: {hp['batch']} * {args.batch_mult} -> {batch}")
-
-    epochs: int = hp["epochs"]
-    patience: int = hp["patience"]
-    workers: int = hp["workers"]
-
-    logger.info(f"Building DETR model: {MODEL_NAME}")
-    model, processor = build_detr_model(MODEL_NAME, num_labels=NUM_DETR_LABELS)
-    model = model.to(DEVICE)
-
-    train_dataset = DetrDetectionDataset(DATASET_DETECT_AUGMENTED_DIR / "train")
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch,
-        shuffle=True,
-        num_workers=workers,
-        collate_fn=_detr_collate,
-    )
-
-    params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.AdamW(params, lr=hp["lr"], weight_decay=hp["weight_decay"])
-    scheduler = CosineAnnealingLR(optimizer, T_max=epochs)
-    scaler = GradScaler(enabled=hp["amp"] and DEVICE == "cuda")
-
-    weights_dir = RESULTS_DIR / f"{ts}-train" / "weights"
-    weights_dir.mkdir(parents=True, exist_ok=True)
-    best_ckpt = weights_dir / "best.pt"
-
-    best_val_map50 = -1.0
-    epochs_no_improve = 0
-    start_time = time.time()
-
-    for epoch in tqdm(range(1, epochs + 1), desc="Epochs", unit="epoch"):
-        train_loss = train_detr_epoch(
-            model, processor, train_loader, optimizer, scaler, DEVICE, epoch, epochs
-        )
-        scheduler.step()
-        val_loss = compute_detr_val_loss(
-            model, processor, DATASET_DETECT_AUGMENTED_DIR, batch, workers, DEVICE
-        )
-        val_metrics = eval_detr_split(
-            model,
-            processor,
-            DATASET_DETECT_AUGMENTED_DIR,
-            "val",
-            batch,
-            workers,
-            DEVICE,
-        )
-        val_map50 = val_metrics["map50"]
-        logger.info(
-            f"Epoch {epoch}/{epochs}  train_loss={train_loss:.4f}"
-            f"  val_loss={val_loss:.4f}  val_mAP50={val_map50:.4f}"
-        )
-        if val_map50 > best_val_map50:
-            best_val_map50 = val_map50
-            epochs_no_improve = 0
-            torch.save(model.state_dict(), best_ckpt)
-            logger.info(f"  Saved best model (val_mAP50={val_map50:.4f})")
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                logger.info(f"Early stopping at epoch {epoch}")
-                break
-
-    train_time = time.time() - start_time
-    logger.info(f"Training completed in {train_time:.2f}s")
-    model.load_state_dict(torch.load(best_ckpt, map_location=DEVICE))
-
-    all_metrics: Dict[str, Any] = {}
-    for split in ["val", "test"]:
-        split_metrics = eval_detr_split(
-            model,
-            processor,
-            DATASET_DETECT_AUGMENTED_DIR,
-            split,
-            batch,
-            workers,
-            DEVICE,
-        )
-        logger.info(
-            f"[{split}] mAP50={split_metrics['map50']:.4f}"
-            f"  mAP50-95={split_metrics['map50_95']:.4f}"
-            f"  box_f1={split_metrics['box_f1']:.4f}"
-        )
-        for key, val in split_metrics.items():
-            all_metrics[f"{split}_{key}"] = val
-
-    del model
-    cleanup_cuda()
-    return train_time, all_metrics
-
-
 # Main
 
 
@@ -1134,7 +825,10 @@ def main() -> None:
     elif MODEL_NAME in FRCNN_MODELS:
         train_time, all_metrics = run_frcnn(ts)
     else:
-        train_time, all_metrics = run_detr(ts)
+        raise ValueError(
+            f"Model '{MODEL_NAME}' not recognised for detection mode. "
+            f"Valid models: {sorted(FRCNN_MODELS)}"
+        )
 
     log_results_to_file(MODEL_NAME, all_metrics, train_time, args.mode)
     logger.info("TRAINING COMPLETED")

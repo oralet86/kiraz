@@ -179,8 +179,8 @@ def get_hyperparams(model_name: str, hpo: bool = False) -> Dict[str, Any]:
 EPOCHS_TORCH = 100
 IMGSZ_CLS_TORCH = 320
 IMGSZ_DETECT_TORCH = 640
-BATCH_CLS_TORCH = 120
-BATCH_DETECT_TORCH = 16
+BATCH_CLS_TORCH = 40
+BATCH_DETECT_TORCH = 8
 PATIENCE_TORCH = 10
 LR_CLS_TORCH = 1e-4
 LR_DETECT_TORCH = 2e-5
@@ -337,16 +337,16 @@ def get_torch_hyperparams(mode: str, model_name: str = "") -> Dict[str, Any]:
 # Pipeline (inference / sorting) hyperparameters
 # =============================================================================
 
-DETECTION_CONF_THRESH: float = 0.4      # minimum detector confidence to keep a box
-TRACK_BUFFER: int = 30                  # frames to keep a LOST track alive
-MIN_SAMPLES_FOR_DECISION: int = 3       # minimum classified samples before deciding
-MAX_SAMPLES_PER_TRACK: int = 10         # cap samples per track to reduce redundancy
-SAMPLE_EVERY_N_FRAMES: int = 2          # sub-sample frames to reduce correlation
-CROP_BUFFER_PX: int = 15               # pixel padding around bbox when cropping
-IMPERFECT_THRESHOLD: float = 0.5       # weighted avg above this → IMPERFECT
-CENTER_WEIGHT_SIGMA: float = 0.3        # Gaussian σ for center-offset weighting
-ARUCO_REAL_SIZE_CM: float = 3.0         # known physical size of the ArUco marker
-ARUCO_CALIB_FRAMES: int = 30            # frames to collect during ArUco calibration
+DETECTION_CONF_THRESH: float = 0.4  # minimum detector confidence to keep a box
+TRACK_BUFFER: int = 30  # frames to keep a LOST track alive
+MIN_SAMPLES_FOR_DECISION: int = 3  # minimum classified samples before deciding
+MAX_SAMPLES_PER_TRACK: int = 10  # cap samples per track to reduce redundancy
+SAMPLE_EVERY_N_FRAMES: int = 2  # sub-sample frames to reduce correlation
+CROP_BUFFER_PX: int = 15  # pixel padding around bbox when cropping
+IMPERFECT_THRESHOLD: float = 0.5  # weighted avg above this → IMPERFECT
+CENTER_WEIGHT_SIGMA: float = 0.3  # Gaussian σ for center-offset weighting
+ARUCO_REAL_SIZE_CM: float = 3.0  # known physical size of the ArUco marker
+ARUCO_CALIB_FRAMES: int = 30  # frames to collect during ArUco calibration
 
 
 def get_pipeline_hyperparams() -> Dict[str, Any]:
