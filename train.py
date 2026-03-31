@@ -1,30 +1,32 @@
 from __future__ import annotations
 
 import argparse
-from ultralytics import YOLO
-from pathlib import Path
-from datetime import datetime
-from typing import Any, Dict, Tuple
-import torch
 import gc
-import time
-import numpy as np
-import random
 import os
+import random
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Tuple
+
+import numpy as np
 import pandas as pd
-from hyperparams import get_hyperparams, HPO_DATABASE
-from log import logger, add_log_file
+import torch
+from ultralytics import YOLO
+
+from hyperparams import HPO_DATABASE, get_hyperparams
+from log import add_log_file, logger
 from metrics import cls_precision_recall_f1, detect_metrics
 from paths import (
-    RESULTS_DIR,
-    RESULTS_CSV,
     DATASET_CLS_AUGMENTED_DIR,
     DATASET_DETECT_AUGMENTED_DIR,
     MODELS_DIR,
+    RESULTS_CSV,
+    RESULTS_DIR,
 )
 
-# from paths import DATASET_DETECT_STRATIFIED_DIR as DATASET_DETECT_AUGMENTED_DIR
-# from paths import DATASET_CLS_STRATIFIED_DIR as DATASET_CLS_AUGMENTED_DIR
+DATASET_DETECT = DATASET_DETECT_AUGMENTED_DIR
+DATASET_CLS = DATASET_CLS_AUGMENTED_DIR
 
 parser = argparse.ArgumentParser(
     description="Train a YOLO model (classification or detection)"
@@ -133,7 +135,7 @@ def ensure_dataset_layout(dataset_dir: Path, mode: str) -> None:
         raise FileNotFoundError(msg)
 
 
-def ensure_data_yaml(dataset_dir: Path, yaml_path: Path) -> None:
+def ensure_data_yaml(dataset_dir: Path, yaml_path: Path | None) -> None:
     """Create data.yaml for detection mode if it doesn't exist."""
     # For augmented dataset, create yaml in the augmented dataset directory
     augmented_yaml_path = dataset_dir / "data.yaml"
@@ -238,12 +240,10 @@ def log_results_to_file(
         logger.error(f"Failed to save results: {e}")
 
 
-def train_model(ts: str, mode: str) -> Tuple[Path, float]:
+def train_model(ts: str, mode: str) -> Tuple[Path, YOLO, float]:
     """Train model based on mode."""
     # Use augmented dataset based on mode
-    dataset_dir = (
-        DATASET_CLS_AUGMENTED_DIR if mode == "cls" else DATASET_DETECT_AUGMENTED_DIR
-    )
+    dataset_dir = DATASET_CLS if mode == "cls" else DATASET_DETECT
     data_yaml = dataset_dir / "data.yaml" if mode == "detect" else None
 
     logger.info(f"Validating dataset layout under {dataset_dir}")
@@ -352,9 +352,7 @@ def evaluate_on_splits(model: YOLO, ts: str, mode: str) -> Dict[str, Any]:
     """Evaluate model on val and test splits."""
     all_metrics: Dict[str, Any] = {}
 
-    dataset_dir = (
-        DATASET_CLS_AUGMENTED_DIR if mode == "cls" else DATASET_DETECT_AUGMENTED_DIR
-    )
+    dataset_dir = DATASET_CLS if mode == "cls" else DATASET_DETECT
     hyperparams = get_hyperparams(MODEL_NAME, hpo=args.hpo)
     original_batch = hyperparams.get("batch", 8)
     scaled_batch = int(original_batch * args.batch_mult)

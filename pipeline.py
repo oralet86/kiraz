@@ -2,17 +2,18 @@
 Cherry Sorting Pipeline
 
 Real-time detection, tracking, and classification pipeline for cherry sorting.
-Runs a YOLO detector with ByteTrack multi-object tracking and a YOLO classifier
-to decide PERFECT / IMPERFECT / NO_STEM for each tracked cherry.
+Runs a YOLO detector (ONNX) with ByteTrack multi-object tracking and a timm
+classifier (ONNX) to decide PERFECT / IMPERFECT / NO_STEM for each tracked cherry.
 
 Usage:
-    python pipeline.py --detector models/detect.pt --classifier models/cls.pt --source 0
+    python pipeline.py --detector models/detect.onnx --classifier models/cls.onnx --source 0
 """
 
 from __future__ import annotations
 
 import argparse
 import math
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -22,6 +23,7 @@ from typing import Generator
 import cv2
 import numpy as np
 import onnx
+import onnxruntime
 import torch
 from torchvision.ops import box_iou
 from ultralytics import YOLO
@@ -49,6 +51,9 @@ CHERRY_CLASS: int = 0  # detector class index for cherry body
 STEM_CLASS: int = 1  # detector class index for stem
 PERFECT_CLASS: int = 0  # classifier index for perfect cherry
 IMPERFECT_CLASS: int = 1  # classifier index for imperfect cherry
+
+MAX_CHERRIES: int = 3  # max cherries kept per frame (top-N by confidence)
+MAX_STEMS: int = 3  # max stems kept per frame (top-N by confidence)
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +87,14 @@ class ClassificationSample:
     center_offset: float
     classifier_conf: float | None = None
     label: int | None = None  # PERFECT_CLASS or IMPERFECT_CLASS
+
+
+@dataclass
+class OnnxClassifier:
+    session: onnxruntime.InferenceSession
+    input_name: str
+    input_size: tuple[int, int]  # (H, W)
+    fixed_batch: bool  # True when the model only accepts batch_size=1
 
 
 @dataclass
@@ -121,33 +134,66 @@ def calibrate_aruco(
     cap: cv2.VideoCapture,
     marker_real_size_cm: float = ARUCO_REAL_SIZE_CM,
     n_frames: int = ARUCO_CALIB_FRAMES,
+    show: bool = False,
+    calib_seconds: float = 10.0,
 ) -> float | None:
     """Estimate pixels-per-cm from ArUco marker detections.
 
-    Reads up to *n_frames* from *cap*, detects DICT_4X4_50 markers, and
-    returns the median px/cm ratio. Returns None if no markers were found.
+    When *show* is False, reads up to *n_frames* frames silently.
+    When *show* is True, runs for *calib_seconds* seconds, displays a live
+    window with detected marker outlines, and prints a terminal countdown.
 
     Args:
         cap: An already-opened cv2.VideoCapture (position is NOT reset).
         marker_real_size_cm: Known physical side length of the ArUco marker.
-        n_frames: How many frames to sample for calibration.
+        n_frames: Frames to sample when show=False.
+        show: If True, display a live calibration window with countdown.
+        calib_seconds: Duration of the calibration window when show=True.
 
     Returns:
         Median px/cm ratio, or None if no markers detected.
     """
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, cv2.aruco.DetectorParameters())
-
     readings: list[float] = []
-    for _ in range(n_frames):
-        ret, frame = cap.read()
-        if not ret:
-            break
-        corners, _, _ = aruco_detector.detectMarkers(frame)
-        for c in corners:
-            # c has shape (1, 4, 2); squeeze to (4, 2)
-            size_px = _compute_marker_size_px(c[0])
-            readings.append(size_px / marker_real_size_cm)
+
+    if show:
+        deadline = time.monotonic() + calib_seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            ret, frame = cap.read()
+            if not ret:
+                break
+            corners, ids, _ = aruco_detector.detectMarkers(frame)
+            for c in corners:
+                readings.append(_compute_marker_size_px(c[0]) / marker_real_size_cm)
+            vis = frame.copy()
+            if corners:
+                cv2.aruco.drawDetectedMarkers(vis, corners, ids)
+            cv2.putText(
+                vis,
+                f"Calibrating... {remaining:.1f}s",
+                (10, 36),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (0, 255, 255),
+                2,
+            )
+            cv2.imshow("ArUco Calibration", vis)
+            cv2.waitKey(1)
+            print(f"\rCalibrating ArUco… {remaining:.1f}s remaining", end="", flush=True)
+        print()  # newline after countdown finishes
+        cv2.destroyWindow("ArUco Calibration")
+    else:
+        for _ in range(n_frames):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            corners, _, _ = aruco_detector.detectMarkers(frame)
+            for c in corners:
+                readings.append(_compute_marker_size_px(c[0]) / marker_real_size_cm)
 
     if not readings:
         return None
@@ -191,6 +237,24 @@ def clip_with_buffer(frame: np.ndarray, bbox: np.ndarray, buffer_px: int) -> np.
     x2 = min(w, int(bbox[2]) + buffer_px)
     y2 = min(h, int(bbox[3]) + buffer_px)
     return frame[y1:y2, x1:x2].copy()
+
+
+def _top_k_per_class(
+    cls_ids: np.ndarray,
+    confs: np.ndarray,
+    target_class: int,
+    k: int,
+) -> np.ndarray:
+    """Return a boolean mask keeping only the top-*k* detections of *target_class*.
+
+    Detections of other classes are not included in the returned mask.
+    """
+    indices = np.where(cls_ids == target_class)[0]
+    if len(indices) > k:
+        indices = indices[np.argsort(confs[indices])[::-1][:k]]
+    mask = np.zeros(len(cls_ids), dtype=bool)
+    mask[indices] = True
+    return mask
 
 
 def any_stem_overlaps(
@@ -316,7 +380,7 @@ def run_pipeline(
                       calibration fails (no marker found).
     """
     detector = _load_model(detector_path)
-    classifier = _load_model(classifier_path)
+    classifier = _load_onnx_classifier(classifier_path)
 
     cap_source: int | str = int(source) if isinstance(source, int) else str(source)
     cap = cv2.VideoCapture(cap_source)
@@ -326,7 +390,7 @@ def run_pipeline(
     try:
         # ── Calibration ───────────────────────────────────────────────────
         logger.info("Starting ArUco calibration…")
-        px_per_cm = calibrate_aruco(cap)
+        px_per_cm = calibrate_aruco(cap, show=show)
         if px_per_cm is None:
             raise RuntimeError(
                 "ArUco marker not detected — cannot calibrate. Aborting."
@@ -360,6 +424,8 @@ def run_pipeline(
                 frame_id += 1
                 yield from _drain(completed_queue)
                 if show:
+                    _show_detection_frame(frame, np.empty((0, 4)), np.empty(0), np.empty(0, dtype=int))
+                    _show_otsu_frame(frame, {})
                     _show_frame(frame, active_tracks)
                 continue
 
@@ -370,6 +436,15 @@ def run_pipeline(
             track_ids = (
                 ids_tensor.cpu().numpy().astype(int) if ids_tensor is not None else None
             )
+
+            # Cap detections to top-N per class by confidence
+            keep = _top_k_per_class(cls_ids, confs, CHERRY_CLASS, MAX_CHERRIES)
+            keep |= _top_k_per_class(cls_ids, confs, STEM_CLASS, MAX_STEMS)
+            xyxy = xyxy[keep]
+            confs = confs[keep]
+            cls_ids = cls_ids[keep]
+            if track_ids is not None:
+                track_ids = track_ids[keep]
 
             stem_mask = cls_ids == STEM_CLASS
             stem_boxes = xyxy[stem_mask] if stem_mask.any() else np.empty((0, 4))
@@ -435,13 +510,29 @@ def run_pipeline(
             ]
 
             if pending:
-                cls_results = classifier.predict(
-                    [s.crop for _, s in pending], verbose=False
+                crops_pre = _preprocess_crops(
+                    [s.crop for _, s in pending], classifier.input_size
                 )
+                if classifier.fixed_batch:
+                    logits = np.concatenate(
+                        [
+                            classifier.session.run(
+                                None, {classifier.input_name: crops_pre[i : i + 1]}
+                            )[0]
+                            for i in range(len(crops_pre))
+                        ],
+                        axis=0,
+                    )
+                else:
+                    logits = classifier.session.run(
+                        None, {classifier.input_name: crops_pre}
+                    )[0]
+                probs = _softmax(logits)
+                top1_labels = probs.argmax(axis=1)
+                top1_confs = probs.max(axis=1)
                 for i, (_, sample) in enumerate(pending):
-                    probs = cls_results[i].probs
-                    sample.label = int(probs.top1)
-                    sample.classifier_conf = float(probs.top1conf)
+                    sample.label = int(top1_labels[i])
+                    sample.classifier_conf = float(top1_confs[i])
 
             # 6. EARLY DECISION — decide as soon as MIN_SAMPLES_FOR_DECISION reached
             for tid, track in list(active_tracks.items()):
@@ -461,6 +552,8 @@ def run_pipeline(
             frame_id += 1
 
             if show:
+                _show_detection_frame(frame, xyxy, confs, cls_ids)
+                _show_otsu_frame(frame, cherry_track_info)
                 _show_frame(frame, active_tracks)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
@@ -492,9 +585,6 @@ def run_pipeline(
 # Model loader
 # ---------------------------------------------------------------------------
 
-_VALID_MODEL_EXTENSIONS: frozenset[str] = frozenset({".pt", ".onnx"})
-
-
 def _assert_ultralytics_onnx(path: Path) -> None:
     """Raise ValueError if *path* was not exported by Ultralytics.
 
@@ -510,52 +600,114 @@ def _assert_ultralytics_onnx(path: Path) -> None:
         )
 
 
-def _assert_ultralytics_pt(model: YOLO) -> None:
-    """Raise ValueError if the already-loaded *model* is not an Ultralytics model.
-
-    Ultralytics checkpoint dicts store a ``model`` entry whose class lives in
-    the ``ultralytics.nn`` package, so checking the module path is reliable.
-    """
-    inner = getattr(model, "model", None)
-    if inner is None or "ultralytics" not in type(inner).__module__:
-        raise ValueError("The .pt file does not contain an Ultralytics YOLO model.")
-
-
 def _load_model(path: str | Path) -> YOLO:
-    """Load and validate a YOLO model from a .pt or .onnx file.
+    """Load and validate a YOLO detector from an .onnx file.
 
-    Verifies that the file was produced by Ultralytics before returning the
-    loaded model, so non-YOLO weights are rejected early with a clear error.
+    Verifies that the file was produced by Ultralytics before loading.
 
     Args:
-        path: Path to the model weights file (.pt or .onnx).
+        path: Path to the detector weights file (.onnx).
 
     Returns:
         Loaded and validated YOLO model.
 
     Raises:
-        ValueError: If the extension is unsupported or the file is not an
-                    Ultralytics model.
+        ValueError: If the file is not an ONNX file or not an Ultralytics export.
         FileNotFoundError: If the file does not exist.
     """
     path = Path(path)
-    if path.suffix not in _VALID_MODEL_EXTENSIONS:
+    if path.suffix != ".onnx":
         raise ValueError(
-            f"Unsupported model format '{path.suffix}'. Expected one of"
-            f" {sorted(_VALID_MODEL_EXTENSIONS)}."
+            f"Detector must be an ONNX file, got '{path.suffix}'."
         )
     if not path.exists():
-        raise FileNotFoundError(f"Model file not found: {path}")
+        raise FileNotFoundError(f"Detector model not found: {path}")
 
-    if path.suffix == ".onnx":
-        _assert_ultralytics_onnx(path)  # cheap header check before loading
+    _assert_ultralytics_onnx(path)
+    return YOLO(str(path), task="detect")
 
-    model = YOLO(str(path))
 
-    if path.suffix == ".pt":
-        _assert_ultralytics_pt(model)  # check after load (no extra file read)
+# ---------------------------------------------------------------------------
+# ONNX classifier loader
+# ---------------------------------------------------------------------------
 
-    return model
+_IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+_IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+
+def _softmax(x: np.ndarray) -> np.ndarray:
+    """Row-wise softmax for a 2-D logits array."""
+    e = np.exp(x - x.max(axis=1, keepdims=True))
+    return e / e.sum(axis=1, keepdims=True)
+
+
+def _preprocess_crops(
+    crops: list[np.ndarray], input_size: tuple[int, int]
+) -> np.ndarray:
+    """Resize, normalise, and batch BGR crops for ONNX classifier inference.
+
+    Args:
+        crops: List of BGR numpy arrays (variable size).
+        input_size: (H, W) expected by the model.
+
+    Returns:
+        Float32 array of shape (N, 3, H, W) with ImageNet normalisation.
+    """
+    h, w = input_size
+    batch = []
+    for crop in crops:
+        img = cv2.resize(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB), (w, h))
+        img = img.astype(np.float32) / 255.0
+        img = (img - _IMAGENET_MEAN) / _IMAGENET_STD
+        batch.append(img.transpose(2, 0, 1))  # HWC → CHW
+    return np.stack(batch)
+
+
+def _load_onnx_classifier(path: str | Path) -> OnnxClassifier:
+    """Load a timm model exported to ONNX for classification inference.
+
+    Args:
+        path: Path to the .onnx classifier file.
+
+    Returns:
+        OnnxClassifier with an onnxruntime session and input metadata.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file is not an ONNX file or input shape is dynamic.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Classifier model not found: {path}")
+    if path.suffix != ".onnx":
+        raise ValueError(
+            f"Classifier must be an ONNX file, got '{path.suffix}'."
+        )
+
+    providers = (
+        ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        if onnxruntime.get_device() == "GPU"
+        else ["CPUExecutionProvider"]
+    )
+    session = onnxruntime.InferenceSession(str(path), providers=providers)
+
+    input_meta = session.get_inputs()[0]
+    input_name: str = input_meta.name
+    shape = input_meta.shape  # expected: [batch, 3, H, W]
+    if not (len(shape) == 4 and isinstance(shape[2], int) and isinstance(shape[3], int)):
+        raise ValueError(
+            f"Cannot infer input size from '{path}': "
+            f"expected static spatial dims, got shape {shape}."
+        )
+
+    fixed_batch = isinstance(shape[0], int) and shape[0] == 1
+
+    return OnnxClassifier(
+        session=session,
+        input_name=input_name,
+        input_size=(int(shape[2]), int(shape[3])),
+        fixed_batch=fixed_batch,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -673,6 +825,67 @@ def _show_frame(frame: np.ndarray, active_tracks: dict[int, Track]) -> None:
     cv2.imshow("Cherry Pipeline", vis)
 
 
+_DET_COLORS: dict[int, tuple[int, int, int]] = {
+    CHERRY_CLASS: (0, 255, 0),
+    STEM_CLASS: (255, 180, 0),
+}
+
+
+def _show_detection_frame(
+    frame: np.ndarray,
+    xyxy: np.ndarray,
+    confs: np.ndarray,
+    cls_ids: np.ndarray,
+) -> None:
+    """Draw raw YOLO detection boxes (no tracking) and display them."""
+    vis = frame.copy()
+    for bbox, conf, cls_id in zip(xyxy, confs, cls_ids):
+        color = _DET_COLORS.get(int(cls_id), (200, 200, 200))
+        x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+        label = f"{'cherry' if cls_id == CHERRY_CLASS else 'stem'} {conf:.2f}"
+        cv2.putText(vis, label, (x1, y1 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+    cv2.imshow("Detection", vis)
+
+
+_OTSU_TILE_SIZE: int = 160  # each cherry crop is resized to this square
+
+
+def _otsu_crop(crop: np.ndarray) -> np.ndarray:
+    """Apply R-G channel difference + Otsu threshold to a BGR crop.
+
+    Returns a 3-channel BGR image: the crop masked to the Otsu region,
+    resized to _OTSU_TILE_SIZE x _OTSU_TILE_SIZE.
+    """
+    r, g = crop[:, :, 2].astype(np.int16), crop[:, :, 1].astype(np.int16)
+    diff = np.clip(r - g, 0, 255).astype(np.uint8)
+    _, mask = cv2.threshold(diff, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    result = cv2.bitwise_and(crop, crop, mask=mask)
+    return cv2.resize(result, (_OTSU_TILE_SIZE, _OTSU_TILE_SIZE))
+
+
+def _show_otsu_frame(
+    frame: np.ndarray,
+    cherry_track_info: dict[int, tuple[np.ndarray, float]],
+) -> None:
+    """Show Otsu R-G segmentation tiles for all currently visible cherries."""
+    tiles: list[np.ndarray] = []
+    for tid, (bbox, _) in cherry_track_info.items():
+        crop = clip_with_buffer(frame, bbox, CROP_BUFFER_PX)
+        if crop.size == 0:
+            continue
+        tile = _otsu_crop(crop)
+        label = f"T{tid}"
+        cv2.putText(tile, label, (4, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
+        tiles.append(tile)
+
+    if not tiles:
+        canvas = np.zeros((_OTSU_TILE_SIZE, _OTSU_TILE_SIZE, 3), dtype=np.uint8)
+    else:
+        canvas = np.concatenate(tiles, axis=1)
+    cv2.imshow("Otsu Classification", canvas)
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
@@ -686,13 +899,13 @@ def main() -> None:
         "--detector",
         type=Path,
         required=True,
-        help="Path to the YOLO detection model (.pt).",
+        help="Path to the YOLO detection model (.onnx).",
     )
     parser.add_argument(
         "--classifier",
         type=Path,
         required=True,
-        help="Path to the YOLO classification model (.pt).",
+        help="Path to the timm classifier checkpoint (.pth).",
     )
     parser.add_argument(
         "--source",

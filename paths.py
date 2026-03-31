@@ -20,6 +20,7 @@ RESULTS_HPO_DETECT_DIR = Path("results_hpo_detect")
 
 # New pipeline dataset directories
 DATASET_ORIGINAL_DIR = Path("datasets/original")
+DATASET_NEGATIVES_DIR = DATASET_ORIGINAL_DIR / "negatives"
 DATASET_DETECT_REMAPPED_DIR = Path("datasets/data_detect_remapped")
 DATASET_CLS_REMAPPED_DIR = Path("datasets/data_cls_remapped")
 DATASET_CLS_CLIPPED_DIR = Path("datasets/data_cls_clipped")
@@ -27,6 +28,10 @@ DATASET_DETECT_STRATIFIED_DIR = Path("datasets/data_detect_stratified")
 DATASET_CLS_STRATIFIED_DIR = Path("datasets/data_cls_stratified")
 DATASET_DETECT_AUGMENTED_DIR = Path("datasets/data_detect_augmented")
 DATASET_CLS_AUGMENTED_DIR = Path("datasets/data_cls_augmented")
+DATASET_DETECT_CHREDUCED_DIR = Path("datasets/data_detect_chreduced")
+DATASET_CLS_CHREDUCED_DIR = Path("datasets/data_cls_chreduced")
+DATASET_DETECT_CHROMATIC_DIR = Path("datasets/data_detect_chromatic")
+DATASET_CLS_CHROMATIC_DIR = Path("datasets/data_cls_chromatic")
 
 # Logs directory
 LOGS_DIR = Path("logs")
@@ -61,7 +66,7 @@ LABELS_SUBDIR = "labels"
 # PATH GENERATION FUNCTIONS
 
 
-def get_dataset_paths(dataset_root: Path, splits: list = None) -> dict:
+def get_dataset_paths(dataset_root: Path, splits: list | None = None) -> dict:
     """
     Generate standardized dataset structure paths.
 
@@ -127,6 +132,10 @@ def ensure_directories() -> None:
         DATASET_CLS_STRATIFIED_DIR,
         DATASET_DETECT_AUGMENTED_DIR,
         DATASET_CLS_AUGMENTED_DIR,
+        DATASET_DETECT_CHREDUCED_DIR,
+        DATASET_CLS_CHREDUCED_DIR,
+        DATASET_DETECT_CHROMATIC_DIR,
+        DATASET_CLS_CHROMATIC_DIR,
     ]
 
     for directory in directories:

@@ -25,6 +25,7 @@ from log import logger
 from data_augmentation import augment_detection_dataset, augment_classification_dataset
 from paths import (
     DATASET_ORIGINAL_DIR,
+    DATASET_NEGATIVES_DIR,
     DATASET_DETECT_REMAPPED_DIR,
     DATASET_CLS_REMAPPED_DIR,
     DATASET_CLS_CLIPPED_DIR,
@@ -32,6 +33,10 @@ from paths import (
     DATASET_CLS_STRATIFIED_DIR,
     DATASET_DETECT_AUGMENTED_DIR,
     DATASET_CLS_AUGMENTED_DIR,
+    DATASET_DETECT_CHREDUCED_DIR,
+    DATASET_CLS_CHREDUCED_DIR,
+    DATASET_DETECT_CHROMATIC_DIR,
+    DATASET_CLS_CHROMATIC_DIR,
     DATASET_SPLITS,
 )
 
@@ -1519,6 +1524,297 @@ def filter_labels_by_class(
     logger.info(f"Filtering complete: {total_files} files, {total_labels} labels")
 
 
+def cherry_channels(img_bgr: np.ndarray) -> np.ndarray:
+    """
+    Convert a BGR image to [R, G, R-G] representation.
+
+    The blue channel is replaced with R-G shifted by 128 to keep it in [0, 255]:
+    - ~255 = strongly reddish
+    - ~128 = neutral
+    - ~0   = strongly greenish
+
+    Args:
+        img_bgr: Input image in BGR format (H, W, 3), uint8
+
+    Returns:
+        Image with channels [R, G, R-G], uint8
+    """
+    _b, g, r = img_bgr[:, :, 0], img_bgr[:, :, 1], img_bgr[:, :, 2]
+    rg = np.clip(r.astype(np.float32) - g.astype(np.float32) + 128, 0, 255).astype(
+        np.uint8
+    )
+    return np.stack([r, g, rg], axis=2)
+
+
+def apply_chreduced_classification_dataset(
+    source_dir: Path, target_dir: Path
+) -> None:
+    """
+    Apply cherry_channels to every image in a classification dataset and save results.
+
+    Walks the source folder-based layout (split/class/*.jpg) and writes the
+    channel-reduced images to the same relative paths under target_dir.
+    Labels are structural (folder names) so no label files need to be copied.
+
+    Args:
+        source_dir: Source dataset directory with split/class folders
+        target_dir: Target directory for channel-reduced dataset
+    """
+    logger.info(f"Starting CLS chreduced from {source_dir} to {target_dir}")
+
+    splits = ["train", "val", "test"]
+
+    for split in splits:
+        source_split_dir = source_dir / split
+        if not source_split_dir.exists():
+            logger.warning(f"Source split directory not found: {source_split_dir}")
+            continue
+
+        class_dirs = [d for d in source_split_dir.iterdir() if d.is_dir()]
+
+        for class_dir in class_dirs:
+            target_class_dir = target_dir / split / class_dir.name
+            target_class_dir.mkdir(parents=True, exist_ok=True)
+
+            image_files: list[Path] = []
+            for ext in IMAGE_EXTENSIONS:
+                image_files.extend(class_dir.glob(f"*{ext}"))
+                image_files.extend(class_dir.glob(f"*{ext.upper()}"))
+
+            logger.info(
+                f"Processing {split}/{class_dir.name}: {len(image_files)} images"
+            )
+
+            processed_count = 0
+            for img_path in image_files:
+                try:
+                    image = cv2.imread(str(img_path))
+                    if image is None:
+                        logger.warning(f"Could not read image: {img_path}")
+                        continue
+
+                    converted = cherry_channels(image)
+                    cv2.imwrite(str(target_class_dir / img_path.name), converted)
+
+                    processed_count += 1
+                    if processed_count % 100 == 0:
+                        logger.info(
+                            f"  Processed {processed_count}/{len(image_files)} images"
+                        )
+
+                except Exception as e:
+                    logger.error(f"Error processing {img_path}: {e}")
+                    continue
+
+            logger.info(
+                f"  Completed {split}/{class_dir.name}: {processed_count} images"
+            )
+
+
+def apply_chreduced_detection_dataset(source_dir: Path, target_dir: Path) -> None:
+    """
+    Apply cherry_channels to every image in a detection dataset and copy labels verbatim.
+
+    Walks the standard YOLO layout (split/images + split/labels) and writes
+    channel-reduced images alongside copied label files under target_dir.
+
+    Args:
+        source_dir: Source dataset directory with split/images/labels structure
+        target_dir: Target directory for channel-reduced dataset
+    """
+    logger.info(f"Starting detect chreduced from {source_dir} to {target_dir}")
+
+    splits = ["train", "val", "test"]
+
+    for split in splits:
+        source_images_dir = source_dir / split / "images"
+        source_labels_dir = source_dir / split / "labels"
+        target_images_dir = target_dir / split / "images"
+        target_labels_dir = target_dir / split / "labels"
+
+        if not source_images_dir.exists():
+            logger.warning(f"Source images directory not found: {source_images_dir}")
+            continue
+
+        target_images_dir.mkdir(parents=True, exist_ok=True)
+        target_labels_dir.mkdir(parents=True, exist_ok=True)
+
+        image_files: list[Path] = []
+        for ext in IMAGE_EXTENSIONS:
+            image_files.extend(source_images_dir.glob(f"*{ext}"))
+            image_files.extend(source_images_dir.glob(f"*{ext.upper()}"))
+
+        logger.info(f"Processing {split}: {len(image_files)} images")
+
+        processed_count = 0
+        for img_path in image_files:
+            try:
+                image = cv2.imread(str(img_path))
+                if image is None:
+                    logger.warning(f"Could not read image: {img_path}")
+                    continue
+
+                converted = cherry_channels(image)
+                cv2.imwrite(str(target_images_dir / img_path.name), converted)
+
+                # Copy label file verbatim — bboxes are unchanged
+                label_src = source_labels_dir / (img_path.stem + ".txt")
+                if label_src.exists():
+                    shutil.copy2(label_src, target_labels_dir / label_src.name)
+
+                processed_count += 1
+                if processed_count % 100 == 0:
+                    logger.info(
+                        f"  Processed {processed_count}/{len(image_files)} images"
+                    )
+
+            except Exception as e:
+                logger.error(f"Error processing {img_path}: {e}")
+                continue
+
+        logger.info(f"  Completed {split}: {processed_count} images")
+
+
+def chromaticity(img_bgr: np.ndarray) -> np.ndarray:
+    """
+    Convert a BGR image to BGR chromaticity (illumination-invariant) representation.
+
+    Each channel is divided by the per-pixel sum of all channels, removing
+    brightness variation while preserving colour ratios. The result is scaled
+    to [0, 255] uint8.
+
+    Args:
+        img_bgr: Input image in BGR format (H, W, 3), uint8
+
+    Returns:
+        Chromaticity image in BGR format, uint8
+    """
+    img = img_bgr.astype(np.float32) + 1e-6
+    S = img.sum(axis=2, keepdims=True)
+    return (img / S * 255).astype(np.uint8)
+
+
+def apply_chromatic_classification_dataset(
+    source_dir: Path, target_dir: Path
+) -> None:
+    """
+    Apply chromaticity to every image in a classification dataset and save results.
+
+    Walks the source folder-based layout (split/class/*.jpg) and writes the
+    chromaticity images to the same relative paths under target_dir.
+
+    Args:
+        source_dir: Source dataset directory with split/class folders
+        target_dir: Target directory for chromaticity dataset
+    """
+    logger.info(f"Starting CLS chromatic from {source_dir} to {target_dir}")
+
+    for split in ["train", "val", "test"]:
+        source_split_dir = source_dir / split
+        if not source_split_dir.exists():
+            logger.warning(f"Source split directory not found: {source_split_dir}")
+            continue
+
+        for class_dir in [d for d in source_split_dir.iterdir() if d.is_dir()]:
+            target_class_dir = target_dir / split / class_dir.name
+            target_class_dir.mkdir(parents=True, exist_ok=True)
+
+            image_files: list[Path] = []
+            for ext in IMAGE_EXTENSIONS:
+                image_files.extend(class_dir.glob(f"*{ext}"))
+                image_files.extend(class_dir.glob(f"*{ext.upper()}"))
+
+            logger.info(
+                f"Processing {split}/{class_dir.name}: {len(image_files)} images"
+            )
+
+            processed_count = 0
+            for img_path in image_files:
+                try:
+                    image = cv2.imread(str(img_path))
+                    if image is None:
+                        logger.warning(f"Could not read image: {img_path}")
+                        continue
+
+                    cv2.imwrite(
+                        str(target_class_dir / img_path.name), chromaticity(image)
+                    )
+                    processed_count += 1
+                    if processed_count % 100 == 0:
+                        logger.info(
+                            f"  Processed {processed_count}/{len(image_files)} images"
+                        )
+
+                except Exception as e:
+                    logger.error(f"Error processing {img_path}: {e}")
+                    continue
+
+            logger.info(
+                f"  Completed {split}/{class_dir.name}: {processed_count} images"
+            )
+
+
+def apply_chromatic_detection_dataset(source_dir: Path, target_dir: Path) -> None:
+    """
+    Apply chromaticity to every image in a detection dataset and copy labels verbatim.
+
+    Walks the standard YOLO layout (split/images + split/labels) and writes
+    chromaticity images alongside copied label files under target_dir.
+
+    Args:
+        source_dir: Source dataset directory with split/images/labels structure
+        target_dir: Target directory for chromaticity dataset
+    """
+    logger.info(f"Starting detect chromatic from {source_dir} to {target_dir}")
+
+    for split in ["train", "val", "test"]:
+        source_images_dir = source_dir / split / "images"
+        source_labels_dir = source_dir / split / "labels"
+        target_images_dir = target_dir / split / "images"
+        target_labels_dir = target_dir / split / "labels"
+
+        if not source_images_dir.exists():
+            logger.warning(f"Source images directory not found: {source_images_dir}")
+            continue
+
+        target_images_dir.mkdir(parents=True, exist_ok=True)
+        target_labels_dir.mkdir(parents=True, exist_ok=True)
+
+        image_files: list[Path] = []
+        for ext in IMAGE_EXTENSIONS:
+            image_files.extend(source_images_dir.glob(f"*{ext}"))
+            image_files.extend(source_images_dir.glob(f"*{ext.upper()}"))
+
+        logger.info(f"Processing {split}: {len(image_files)} images")
+
+        processed_count = 0
+        for img_path in image_files:
+            try:
+                image = cv2.imread(str(img_path))
+                if image is None:
+                    logger.warning(f"Could not read image: {img_path}")
+                    continue
+
+                cv2.imwrite(str(target_images_dir / img_path.name), chromaticity(image))
+
+                # Copy label file verbatim — bboxes are unchanged
+                label_src = source_labels_dir / (img_path.stem + ".txt")
+                if label_src.exists():
+                    shutil.copy2(label_src, target_labels_dir / label_src.name)
+
+                processed_count += 1
+                if processed_count % 100 == 0:
+                    logger.info(
+                        f"  Processed {processed_count}/{len(image_files)} images"
+                    )
+
+            except Exception as e:
+                logger.error(f"Error processing {img_path}: {e}")
+                continue
+
+        logger.info(f"  Completed {split}: {processed_count} images")
+
+
 def run_full_dataset_pipeline() -> None:
     """
     Run the complete dataset processing pipeline.
@@ -1531,6 +1827,7 @@ def run_full_dataset_pipeline() -> None:
     2. original (flat) -> data_cls_remapped (flat): keep cherry(0) and cherry-imperfect(1), drop stem
     3. data_cls_remapped (flat) -> data_cls_clipped (cls flat): crop each object individually to class folders
     4. data_detect_remapped (flat) -> data_detect_stratified (split): stratified train/val/test
+    4b. original/negatives -> data_detect_stratified splits: random split, empty label files
     5. data_cls_clipped (cls flat) -> data_cls_stratified (split): stratified train/val/test by class
     6. data_detect_stratified (split) -> data_detect_augmented (split): augment
     7. data_cls_stratified (split) -> data_cls_augmented (split): augment
@@ -1548,6 +1845,10 @@ def run_full_dataset_pipeline() -> None:
         DATASET_CLS_STRATIFIED_DIR,
         DATASET_DETECT_AUGMENTED_DIR,
         DATASET_CLS_AUGMENTED_DIR,
+        DATASET_DETECT_CHREDUCED_DIR,
+        DATASET_CLS_CHREDUCED_DIR,
+        DATASET_DETECT_CHROMATIC_DIR,
+        DATASET_CLS_CHROMATIC_DIR,
     ]:
         if output_dir.exists():
             shutil.rmtree(output_dir)
@@ -1600,6 +1901,39 @@ def run_full_dataset_pipeline() -> None:
         DATASET_DETECT_STRATIFIED_DIR / "data.yaml",
     )
 
+    # Step 4b: distribute negatives across detection splits with a simple random split
+    if DATASET_NEGATIVES_DIR.exists():
+        logger.info("STEP 4b: distributing negatives into data_detect_stratified splits")
+        neg_images = [
+            p for p in DATASET_NEGATIVES_DIR.iterdir()
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+        ]
+        random.seed(random_seed)
+        random.shuffle(neg_images)
+        n = len(neg_images)
+        splits_list = list(split_ratios.keys())
+        boundaries = [0]
+        cumulative = 0.0
+        for ratio in list(split_ratios.values())[:-1]:
+            cumulative += ratio
+            boundaries.append(int(round(n * cumulative)))
+        boundaries.append(n)
+        for split_idx, split in enumerate(splits_list):
+            split_images_dir = DATASET_DETECT_STRATIFIED_DIR / split / "images"
+            split_labels_dir = DATASET_DETECT_STRATIFIED_DIR / split / "labels"
+            split_images_dir.mkdir(parents=True, exist_ok=True)
+            split_labels_dir.mkdir(parents=True, exist_ok=True)
+            for img_path in neg_images[boundaries[split_idx]:boundaries[split_idx + 1]]:
+                shutil.copy2(img_path, split_images_dir / img_path.name)
+                (split_labels_dir / f"{img_path.stem}.txt").touch()
+        counts = {
+            splits_list[i]: boundaries[i + 1] - boundaries[i]
+            for i in range(len(splits_list))
+        }
+        logger.info(f"  Negatives distributed: {counts}")
+    else:
+        logger.warning(f"Negatives directory not found, skipping: {DATASET_NEGATIVES_DIR}")
+
     # Step 5: data_cls_clipped -> data_cls_stratified
     logger.info(
         "STEP 5: data_cls_clipped -> data_cls_stratified (stratified cls split)"
@@ -1624,6 +1958,30 @@ def run_full_dataset_pipeline() -> None:
         DATASET_CLS_STRATIFIED_DIR, DATASET_CLS_AUGMENTED_DIR, augment_factor=4
     )
 
+    # Step 8: data_detect_augmented -> data_detect_chreduced
+    logger.info(
+        "STEP 8: data_detect_augmented -> data_detect_chreduced (cherry channel reduction)"
+    )
+    apply_chreduced_detection_dataset(DATASET_DETECT_AUGMENTED_DIR, DATASET_DETECT_CHREDUCED_DIR)
+
+    # Step 9: data_cls_augmented -> data_cls_chreduced
+    logger.info(
+        "STEP 9: data_cls_augmented -> data_cls_chreduced (cherry channel reduction)"
+    )
+    apply_chreduced_classification_dataset(DATASET_CLS_AUGMENTED_DIR, DATASET_CLS_CHREDUCED_DIR)
+
+    # Step 10: data_detect_augmented -> data_detect_chromatic
+    logger.info(
+        "STEP 10: data_detect_augmented -> data_detect_chromatic (chromaticity)"
+    )
+    apply_chromatic_detection_dataset(DATASET_DETECT_AUGMENTED_DIR, DATASET_DETECT_CHROMATIC_DIR)
+
+    # Step 11: data_cls_augmented -> data_cls_chromatic
+    logger.info(
+        "STEP 11: data_cls_augmented -> data_cls_chromatic (chromaticity)"
+    )
+    apply_chromatic_classification_dataset(DATASET_CLS_AUGMENTED_DIR, DATASET_CLS_CHROMATIC_DIR)
+
     logger.info("DATASET PIPELINE COMPLETED SUCCESSFULLY!")
     logger.info("Generated datasets:")
     logger.info(f"  - Detection remapped:        {DATASET_DETECT_REMAPPED_DIR}")
@@ -1633,6 +1991,10 @@ def run_full_dataset_pipeline() -> None:
     logger.info(f"  - Classification stratified: {DATASET_CLS_STRATIFIED_DIR}")
     logger.info(f"  - Detection augmented:       {DATASET_DETECT_AUGMENTED_DIR}")
     logger.info(f"  - Classification augmented:  {DATASET_CLS_AUGMENTED_DIR}")
+    logger.info(f"  - Detection chreduced:       {DATASET_DETECT_CHREDUCED_DIR}")
+    logger.info(f"  - Classification chreduced:  {DATASET_CLS_CHREDUCED_DIR}")
+    logger.info(f"  - Detection chromatic:       {DATASET_DETECT_CHROMATIC_DIR}")
+    logger.info(f"  - Classification chromatic:  {DATASET_CLS_CHROMATIC_DIR}")
 
 
 if __name__ == "__main__":

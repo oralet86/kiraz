@@ -607,7 +607,6 @@ def main() -> None:
     if args.task in ["detect", "both"] and DATASET_DETECT_AUGMENTED_DIR.exists():
         logger.info(f"Removing old {DATASET_DETECT_AUGMENTED_DIR}...")
         shutil.rmtree(DATASET_DETECT_AUGMENTED_DIR)
-
     # Ensure directories exist
     ensure_directories()
 

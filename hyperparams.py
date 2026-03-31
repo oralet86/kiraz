@@ -225,22 +225,26 @@ _TORCH_MODEL_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "lr": 5e-5,
         "weight_decay": 3e-4,
         "label_smoothing": 0.1,
+        "imgsz": 224,
     },
     "vit-base": {
         "lr": 2e-5,
         "weight_decay": 5e-4,
         "label_smoothing": 0.1,
+        "imgsz": 224,
     },
     # DeiT — same tiered policy as ViT equivalents
     "deit-small": {
         "lr": 5e-5,
         "weight_decay": 3e-4,
         "label_smoothing": 0.1,
+        "imgsz": 224,
     },
     "deit-base": {
         "lr": 2e-5,
         "weight_decay": 5e-4,
         "label_smoothing": 0.1,
+        "imgsz": 224,
     },
     # MobileViT V1 — very compact (~1–6 M params) but still attention-based;
     # mild regularisation + native 256×256 input size
@@ -286,6 +290,7 @@ _TORCH_MODEL_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "lr": 3e-5,
         "weight_decay": 5e-4,
         "label_smoothing": 0.1,
+        "imgsz": 224,
     },
 }
 

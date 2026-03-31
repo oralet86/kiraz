@@ -13,6 +13,8 @@ logs
 .vscode
 .claude
 CLAUDE.md
+onnx_models
+graphs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
